@@ -1,0 +1,26 @@
+<idea-plugin>
+    <id>com.flowmetric.plugin</id>
+    <name>FlowMetric</name>
+    <vendor email="support@flowmetric.local">FlowMetric</vendor>
+    <description>
+        Local-only developer analytics that estimates whether saved changes were likely AI-assisted.
+    </description>
+
+    <depends>com.intellij.modules.platform</depends>
+    <depends>org.jetbrains.android</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <applicationService serviceImplementation="com.flowmetric.plugin.state.FlowMetricAppState"/>
+        <projectService serviceImplementation="com.flowmetric.plugin.services.FlowMetricProjectService"/>
+        <fileDocumentManagerListener implementation="com.flowmetric.plugin.listeners.FlowMetricDocumentListener"/>
+        <postStartupActivity implementation="com.flowmetric.plugin.services.FlowMetricStartupActivity"/>
+    </extensions>
+
+    <actions>
+        <action
+            id="FlowMetric.SelectTrackedProject"
+            class="com.flowmetric.plugin.actions.SelectTrackedProjectAction"
+            text="Select FlowMetric Tracked Project"
+            description="Choose the root tracked by FlowMetric within the current IDE project"/>
+    </actions>
+</idea-plugin>

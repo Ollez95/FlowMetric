@@ -1,38 +1,45 @@
 package com.flowmetric.shared.analytics
 
+import com.flowmetric.shared.config.ProjectFileRules
 import com.flowmetric.shared.model.AnalyticsFilter
 import com.flowmetric.shared.model.ChangeClassification
 import com.flowmetric.shared.model.ChangeEvent
 import com.flowmetric.shared.model.ConfidenceLevel
 import com.flowmetric.shared.model.DashboardMetrics
 import com.flowmetric.shared.model.FileEstimate
+import com.flowmetric.shared.model.FlowMetricProjectConfig
 import com.flowmetric.shared.model.SessionSummary
 import com.flowmetric.shared.model.TrendPoint
+import com.flowmetric.shared.persistence.FlowMetricProjectConfigStore
 import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
-import kotlin.io.path.extension
-import kotlin.io.path.name
 import kotlin.math.roundToInt
 
 class AnalyticsEngine(
-    private val supportedExtensions: Set<String> = setOf(
-        "kt", "kts", "java", "xml", "gradle", "md", "js", "ts", "tsx", "jsx", "json", "yml", "yaml",
-    ),
+    private val supportedExtensions: Set<String> = ProjectFileRules.defaultSupportedExtensions,
 ) {
+    data class ProjectScanStats(
+        val totalLines: Int,
+        val totalFiles: Int,
+    )
+
     fun buildDashboard(
         events: List<ChangeEvent>,
         filter: AnalyticsFilter,
         totalProjectLines: Int = countProjectLines(Path.of(filter.projectPath)),
+        totalProjectFiles: Int = countProjectFiles(Path.of(filter.projectPath)),
     ): DashboardMetrics {
         val filteredEvents = events
+            .asSequence()
             .filter { it.projectPath == filter.projectPath }
             .filter { filter.fromEpochMillis == null || it.timestampEpochMillis >= filter.fromEpochMillis }
             .filter { filter.toEpochMillis == null || it.timestampEpochMillis <= filter.toEpochMillis }
             .filter { it.snapshot.confidence in filter.confidence }
             .sortedByDescending { it.timestampEpochMillis }
+            .toList()
 
         val changedLines = filteredEvents.sumOf { it.delta.changedLines }
         val estimatedAiLines = filteredEvents.sumOf { it.snapshot.estimatedAiLines }
@@ -44,6 +51,7 @@ class AnalyticsEngine(
 
         return DashboardMetrics(
             totalProjectLines = totalProjectLines,
+            totalProjectFiles = totalProjectFiles,
             changedLines = changedLines,
             estimatedAiLines = estimatedAiLines,
             estimatedNonAiLines = estimatedNonAiLines,
@@ -125,16 +133,26 @@ class AnalyticsEngine(
         else -> ConfidenceLevel.LOW
     }
 
-    fun countProjectLines(projectRoot: Path): Int {
-        if (!Files.exists(projectRoot)) return 0
+    fun countProjectLines(projectRoot: Path): Int = scanProject(projectRoot).totalLines
+
+    fun countProjectFiles(projectRoot: Path): Int = scanProject(projectRoot).totalFiles
+
+    fun scanProject(
+        projectRoot: Path,
+        config: FlowMetricProjectConfig = FlowMetricProjectConfigStore.projectConfigStore(projectRoot).readOrCreate(),
+    ): ProjectScanStats {
+        if (!Files.exists(projectRoot)) return ProjectScanStats(totalLines = 0, totalFiles = 0)
         Files.walk(projectRoot).use { paths ->
-            return paths.iterator().asSequence()
+            var totalLines = 0
+            var totalFiles = 0
+            paths.iterator().asSequence()
                 .filter { Files.isRegularFile(it) }
-                .filter { !it.toString().contains("${Path.of(".flowmetric")}") }
-                .filter { !it.toString().contains("${Path.of("build")}") }
-                .filter { it.extension.lowercase() in supportedExtensions || it.name == "Dockerfile" }
-                .map { path -> runCatching { countLines(path) }.getOrDefault(0) }
-                .sum()
+                .filter { ProjectFileRules.isTrackable(projectRoot, it, config, supportedExtensions) }
+                .forEach { path ->
+                    totalFiles += 1
+                    totalLines += runCatching { countLines(path) }.getOrDefault(0)
+                }
+            return ProjectScanStats(totalLines = totalLines, totalFiles = totalFiles)
         }
     }
 

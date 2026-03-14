@@ -38,6 +38,7 @@ data class ChangeMetadata(
     val fileExtension: String,
     val languageHint: String? = null,
     val latestContentHash: String? = null,
+    val linePatch: String? = null,
     val millisSincePreviousEvent: Long? = null,
     val sessionEventIndex: Int = 1,
     val sessionDurationMillis: Long = 0,
@@ -123,6 +124,7 @@ data class TrendPoint(
 @Serializable
 data class DashboardMetrics(
     val totalProjectLines: Int,
+    val totalProjectFiles: Int,
     val changedLines: Int,
     val estimatedAiLines: Int,
     val estimatedNonAiLines: Int,
@@ -147,6 +149,19 @@ data class GitFileDelta(
 )
 
 @Serializable
+data class GitFileObservation(
+    val id: String,
+    val filePath: String,
+    val insertedLines: Int,
+    val deletedLines: Int,
+    val status: GitFileStatus,
+    val observedAtEpochMillis: Long,
+    val fileModifiedEpochMillis: Long? = null,
+    val fromTrackedEvents: Boolean = false,
+    val linePatch: String? = null,
+)
+
+@Serializable
 enum class GitFileStatus {
     MODIFIED,
     ADDED,
@@ -167,6 +182,7 @@ data class GitWorkingTreeSummary(
     val estimatedNonAiLines: Int = 0,
     val changedFilesCount: Int = 0,
     val files: List<GitFileDelta> = emptyList(),
+    val observations: List<GitFileObservation> = emptyList(),
     val heuristicAssessment: GitHeuristicAssessment? = null,
     val message: String? = null,
 )
@@ -184,6 +200,12 @@ data class GitHeuristicAssessment(
 data class FlowMetricSnapshot(
     val projects: List<TrackedProject> = emptyList(),
     val events: List<ChangeEvent> = emptyList(),
+)
+
+@Serializable
+data class FlowMetricProjectConfig(
+    val ignoredExtensions: Set<String> = emptySet(),
+    val ignoredPathFragments: List<String> = emptyList(),
 )
 
 @Serializable

@@ -60,4 +60,17 @@ class HeuristicScorerTest {
 
         assertTrue(snapshot.classification != ChangeClassification.ESTIMATED_AI_GENERATED)
     }
+
+    @Test
+    fun `rollback style delete heavy change trends non ai`() {
+        val snapshot = scorer.score(
+            insertedLines = 2,
+            deletedLines = 18,
+            timestampEpochMillis = 1_000L,
+            context = HeuristicContext(currentSource = EventSource.EXTERNAL_FILE_CHANGE),
+        )
+
+        assertEquals(ChangeClassification.ESTIMATED_NON_AI, snapshot.classification)
+        assertTrue(snapshot.estimatedNonAiLines > snapshot.estimatedAiLines)
+    }
 }

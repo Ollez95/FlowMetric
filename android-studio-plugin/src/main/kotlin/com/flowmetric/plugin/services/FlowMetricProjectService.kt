@@ -1,13 +1,18 @@
 package com.flowmetric.plugin.services
 
 import com.flowmetric.plugin.state.FlowMetricAppState
+import com.flowmetric.shared.analytics.LineDiffEstimator
+import com.flowmetric.shared.analytics.LinePatchBuilder
+import com.flowmetric.shared.config.ProjectFileRules
 import com.flowmetric.shared.heuristics.HeuristicContext
 import com.flowmetric.shared.heuristics.HeuristicScorer
 import com.flowmetric.shared.model.ChangeEvent
 import com.flowmetric.shared.model.ChangeMetadata
 import com.flowmetric.shared.model.EventSource
 import com.flowmetric.shared.model.FileLineDelta
+import com.flowmetric.shared.model.FlowMetricProjectConfig
 import com.flowmetric.shared.model.TrackedProject
+import com.flowmetric.shared.persistence.FlowMetricProjectConfigStore
 import com.flowmetric.shared.persistence.FlowMetricStore
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
@@ -33,6 +38,8 @@ class FlowMetricProjectService(private val project: Project) {
     private val snapshotCache = ConcurrentHashMap<String, String>()
     private val eventCache = mutableListOf<ChangeEvent>()
     private val eventLock = Any()
+    @Volatile private var cachedConfigRoot: String? = null
+    @Volatile private var cachedProjectConfig: FlowMetricProjectConfig = FlowMetricProjectConfig()
 
     init {
         subscribeToExternalChanges()
@@ -45,6 +52,8 @@ class FlowMetricProjectService(private val project: Project) {
 
     fun updateTrackedRoot(path: String) {
         project.service<FlowMetricAppState>().updateSelectedRoot(project.locationHash, path)
+        cachedConfigRoot = null
+        cachedProjectConfig = loadProjectConfig(path)
     }
 
     fun processSave(file: VirtualFile, document: Document) {
@@ -128,6 +137,7 @@ class FlowMetricProjectService(private val project: Project) {
                     fileExtension = Path.of(file.path).extension,
                     languageHint = file.fileType.name,
                     latestContentHash = currentText.sha256(),
+                    linePatch = LinePatchBuilder.build(previousText, currentText),
                     millisSincePreviousEvent = millisSincePreviousEvent,
                     sessionEventIndex = sessionEvents.size + 1,
                     sessionDurationMillis = now - sessionStart,
@@ -156,10 +166,12 @@ class FlowMetricProjectService(private val project: Project) {
         return !file.isDirectory && file.path.startsWith(root)
     }
 
-    private fun isTrackable(file: VirtualFile): Boolean =
-        isTracked(file) &&
+    private fun isTrackable(file: VirtualFile): Boolean {
+        val root = trackedRootPath() ?: return false
+        return isTracked(file) &&
             !file.fileType.isBinary &&
-            ignoredPathFragments.none { file.path.contains(it) }
+            ProjectFileRules.isTrackable(Path.of(root), Path.of(file.path), loadProjectConfig(root))
+    }
 
     private fun readFileText(file: VirtualFile): String? =
         runCatching { String(file.contentsToByteArray(), file.charset) }.getOrNull()
@@ -209,98 +221,15 @@ class FlowMetricProjectService(private val project: Project) {
             FileDocumentManager.getInstance().getCachedDocument(file)?.let { !it.isWritable } != true
     }
 
-    private fun estimateLineDelta(previousText: String, currentText: String): FileLineDelta {
-        val previousLines = previousText.lines()
-        val currentLines = currentText.lines()
-        if (previousLines == currentLines) {
-            return FileLineDelta()
-        }
+    private fun estimateLineDelta(previousText: String, currentText: String): FileLineDelta =
+        LineDiffEstimator.estimate(previousText, currentText)
 
-        val diff = computeLineDiff(previousLines, currentLines)
-        return FileLineDelta(
-            inserted = diff.inserted,
-            deleted = diff.deleted,
-            largestInsertedBlock = diff.largestInsertedBlock,
-            largestDeletedBlock = diff.largestDeletedBlock,
-        )
-    }
-
-    private fun computeLineDiff(left: List<String>, right: List<String>): LineDiffSummary {
-        if (left.isEmpty() && right.isEmpty()) {
-            return LineDiffSummary()
-        }
-
-        val dp = Array(left.size + 1) { IntArray(right.size + 1) }
-        for (leftIndex in left.indices.reversed()) {
-            for (rightIndex in right.indices.reversed()) {
-                dp[leftIndex][rightIndex] = if (left[leftIndex] == right[rightIndex]) {
-                    dp[leftIndex + 1][rightIndex + 1] + 1
-                } else {
-                    maxOf(dp[leftIndex + 1][rightIndex], dp[leftIndex][rightIndex + 1])
-                }
-            }
-        }
-
-        var leftIndex = 0
-        var rightIndex = 0
-        var inserted = 0
-        var deleted = 0
-        var insertedRun = 0
-        var deletedRun = 0
-        var largestInsertedBlock = 0
-        var largestDeletedBlock = 0
-
-        fun flushRuns() {
-            largestInsertedBlock = maxOf(largestInsertedBlock, insertedRun)
-            largestDeletedBlock = maxOf(largestDeletedBlock, deletedRun)
-            insertedRun = 0
-            deletedRun = 0
-        }
-
-        while (leftIndex < left.size && rightIndex < right.size) {
-            when {
-                left[leftIndex] == right[rightIndex] -> {
-                    flushRuns()
-                    leftIndex++
-                    rightIndex++
-                }
-
-                dp[leftIndex + 1][rightIndex] >= dp[leftIndex][rightIndex + 1] -> {
-                    deleted++
-                    deletedRun++
-                    largestInsertedBlock = maxOf(largestInsertedBlock, insertedRun)
-                    insertedRun = 0
-                    leftIndex++
-                }
-
-                else -> {
-                    inserted++
-                    insertedRun++
-                    largestDeletedBlock = maxOf(largestDeletedBlock, deletedRun)
-                    deletedRun = 0
-                    rightIndex++
-                }
-            }
-        }
-
-        while (leftIndex < left.size) {
-            deleted++
-            deletedRun++
-            leftIndex++
-        }
-        while (rightIndex < right.size) {
-            inserted++
-            insertedRun++
-            rightIndex++
-        }
-        flushRuns()
-
-        return LineDiffSummary(
-            inserted = inserted,
-            deleted = deleted,
-            largestInsertedBlock = largestInsertedBlock,
-            largestDeletedBlock = largestDeletedBlock,
-        )
+    private fun loadProjectConfig(rootPath: String): FlowMetricProjectConfig {
+        if (cachedConfigRoot == rootPath) return cachedProjectConfig
+        val config = FlowMetricProjectConfigStore.projectConfigStore(Path.of(rootPath)).readOrCreate()
+        cachedConfigRoot = rootPath
+        cachedProjectConfig = config
+        return config
     }
 
     private fun String.sha256(): String {
@@ -310,26 +239,10 @@ class FlowMetricProjectService(private val project: Project) {
 
     companion object {
         private const val SESSION_WINDOW_MS = 10 * 60 * 1000L
-        private val ignoredPathFragments = listOf(
-            "/.flowmetric/",
-            "/.git/",
-            "/.gradle/",
-            "/.idea/",
-            "/build/",
-            "/out/",
-            "/node_modules/",
-        )
     }
 }
 
 private data class ExternalChangeCandidate(
     val file: VirtualFile,
     val previousText: String,
-)
-
-private data class LineDiffSummary(
-    val inserted: Int = 0,
-    val deleted: Int = 0,
-    val largestInsertedBlock: Int = 0,
-    val largestDeletedBlock: Int = 0,
 )

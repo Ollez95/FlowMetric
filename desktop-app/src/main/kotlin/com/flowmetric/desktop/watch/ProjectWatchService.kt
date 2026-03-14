@@ -28,7 +28,7 @@ class ProjectWatchService : Closeable {
     fun start(
         scope: CoroutineScope,
         projectRoot: Path,
-        onChange: (ProjectChange) -> Unit,
+        onChange: (ProjectChangeBatch) -> Unit,
     ) {
         stop()
         if (!Files.exists(projectRoot)) return
@@ -38,7 +38,7 @@ class ProjectWatchService : Closeable {
         registerRecursively(projectRoot, service)
 
         watchJob = scope.launch(Dispatchers.IO) {
-            var pendingChange: ProjectChange? = null
+            val pendingChanges = linkedMapOf<Path, ProjectFileChange>()
             var debounceJob: Job? = null
 
             while (isActive) {
@@ -68,13 +68,15 @@ class ProjectWatchService : Closeable {
                         registerRecursively(child, service)
                     }
 
-                    classify(child)?.let { change ->
-                        pendingChange = merge(pendingChange, change)
+                    classify(child, kind)?.let { change ->
+                        pendingChanges[change.path] = change
                         debounceJob?.cancel()
                         debounceJob = launch {
                             delay(DEBOUNCE_MS)
-                            pendingChange?.let(onChange)
-                            pendingChange = null
+                            if (pendingChanges.isNotEmpty()) {
+                                onChange(ProjectChangeBatch(pendingChanges.values.toList()))
+                                pendingChanges.clear()
+                            }
                         }
                     }
                 }
@@ -120,12 +122,14 @@ class ProjectWatchService : Closeable {
         )
     }
 
-    private fun classify(path: Path): ProjectChange? {
+    private fun classify(path: Path, kind: WatchEvent.Kind<*>): ProjectFileChange? {
         val normalized = path.toString()
         return when {
             ignoredPathFragments.any { normalized.contains(it) } -> null
-            normalized.contains("/.flowmetric/events.json") -> ProjectChange.TRACKING_DATA
-            else -> ProjectChange.PROJECT_FILES
+            normalized.contains("/.flowmetric/events.json") ->
+                ProjectFileChange(path = path, category = ProjectChangeCategory.TRACKING_DATA, kind = kind.toChangeKind())
+            else ->
+                ProjectFileChange(path = path, category = ProjectChangeCategory.PROJECT_FILES, kind = kind.toChangeKind())
         }
     }
 
@@ -134,13 +138,6 @@ class ProjectWatchService : Closeable {
         return skippedDirectoryNames.contains(name)
     }
 
-    private fun merge(current: ProjectChange?, incoming: ProjectChange): ProjectChange =
-        when {
-            current == null -> incoming
-            current == ProjectChange.PROJECT_FILES || incoming == ProjectChange.PROJECT_FILES -> ProjectChange.PROJECT_FILES
-            else -> ProjectChange.TRACKING_DATA
-        }
-
     companion object {
         private const val DEBOUNCE_MS = 700L
         private val skippedDirectoryNames = setOf(".git", ".gradle", ".idea", "build", "out", "node_modules")
@@ -148,7 +145,29 @@ class ProjectWatchService : Closeable {
     }
 }
 
-enum class ProjectChange {
+data class ProjectChangeBatch(
+    val changes: List<ProjectFileChange>,
+)
+
+data class ProjectFileChange(
+    val path: Path,
+    val category: ProjectChangeCategory,
+    val kind: FileSystemChangeKind,
+)
+
+enum class ProjectChangeCategory {
     TRACKING_DATA,
     PROJECT_FILES,
+}
+
+enum class FileSystemChangeKind {
+    CREATED,
+    MODIFIED,
+    DELETED,
+}
+
+private fun WatchEvent.Kind<*>.toChangeKind(): FileSystemChangeKind = when (this) {
+    StandardWatchEventKinds.ENTRY_CREATE -> FileSystemChangeKind.CREATED
+    StandardWatchEventKinds.ENTRY_DELETE -> FileSystemChangeKind.DELETED
+    else -> FileSystemChangeKind.MODIFIED
 }

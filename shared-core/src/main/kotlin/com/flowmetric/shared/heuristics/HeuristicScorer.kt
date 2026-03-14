@@ -43,6 +43,11 @@ class HeuristicScorer {
         var nonAiScore = 0.0
         val signals = mutableListOf<HeuristicSignal>()
 
+        if (deletedLines >= insertedLines && deletedLines >= 8) {
+            nonAiScore += if (deletedLines >= insertedLines * 2 || insertedLines == 0) 0.55 else 0.35
+            signals += HeuristicSignal.HIGH_DELETE_RATIO
+        }
+
         if (insertedLines >= 25 && insertedLines >= deletedLines * 2) {
             aiScore += 0.35
             signals += HeuristicSignal.LARGE_INSERTION

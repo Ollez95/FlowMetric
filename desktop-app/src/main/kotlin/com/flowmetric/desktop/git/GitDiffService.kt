@@ -1,17 +1,19 @@
 package com.flowmetric.desktop.git
 
-import com.flowmetric.shared.model.ChangeClassification
-import com.flowmetric.shared.model.ConfidenceLevel
+import com.flowmetric.shared.config.ProjectFileRules
+import com.flowmetric.shared.model.FlowMetricProjectConfig
 import com.flowmetric.shared.model.GitFileDelta
+import com.flowmetric.shared.model.GitFileObservation
 import com.flowmetric.shared.model.GitFileStatus
-import com.flowmetric.shared.model.GitHeuristicAssessment
 import com.flowmetric.shared.model.GitWorkingTreeSummary
+import com.flowmetric.shared.persistence.FlowMetricProjectConfigStore
+import com.flowmetric.shared.persistence.FlowMetricStore
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.attribute.FileTime
+import java.util.UUID
 import kotlin.io.path.exists
 import kotlin.io.path.isRegularFile
-import kotlin.math.roundToInt
 
 class GitDiffService {
     fun summarize(projectRoot: Path): GitWorkingTreeSummary {
@@ -31,6 +33,7 @@ class GitDiffService {
         }
 
         val repoPath = Path.of(repoRoot)
+        val config = FlowMetricProjectConfigStore.projectConfigStore(projectRoot).readOrCreate()
         val tracked = parseTrackedDiff(repoPath)
         val untracked = parseUntrackedFiles(repoPath)
         val aggregatedFiles = (tracked + untracked)
@@ -44,12 +47,14 @@ class GitDiffService {
                     lastModifiedEpochMillis = deltas.mapNotNull { it.lastModifiedEpochMillis }.maxOrNull(),
                 )
             }
-        val files = assessFiles(aggregatedFiles)
+            .filter { isTrackable(projectRoot, repoPath, it, config) }
+        val files = aggregatedFiles
             .sortedWith(
                 compareByDescending<GitFileDelta> { it.lastModifiedEpochMillis ?: 0L }
                     .thenByDescending { it.insertedLines + it.deletedLines }
                     .thenBy { it.filePath },
             )
+        val observations = buildObservations(projectRoot, repoPath, files)
 
         return GitWorkingTreeSummary(
             available = true,
@@ -60,7 +65,8 @@ class GitDiffService {
             estimatedNonAiLines = files.sumOf { it.estimatedNonAiLines },
             changedFilesCount = files.size,
             files = files,
-            heuristicAssessment = assess(files),
+            observations = observations,
+            heuristicAssessment = null,
             message = if (files.isEmpty()) "Working tree is clean." else null,
         )
     }
@@ -109,6 +115,17 @@ class GitDiffService {
             .toList()
     }
 
+    fun diffForFile(projectRoot: Path, filePath: String, status: GitFileStatus): String {
+        val repoRoot = runGit(projectRoot, "rev-parse", "--show-toplevel").trim()
+        if (repoRoot.isBlank()) return "Git repository not available."
+
+        val repoPath = Path.of(repoRoot)
+        return when (status) {
+            GitFileStatus.UNTRACKED, GitFileStatus.ADDED -> buildUntrackedDiff(repoPath.resolve(filePath), filePath)
+            else -> runGit(repoPath, "diff", "--", filePath).ifBlank { "No current diff available for this file." }
+        }
+    }
+
     private fun runGit(workingDirectory: Path, vararg args: String): String {
         val process = ProcessBuilder(listOf("git", *args))
             .directory(workingDirectory.toFile())
@@ -118,6 +135,23 @@ class GitDiffService {
         val output = process.inputStream.bufferedReader().use { it.readText() }
         val exitCode = process.waitFor()
         return if (exitCode == 0) output else ""
+    }
+
+    private fun buildUntrackedDiff(path: Path, filePath: String): String {
+        if (!path.exists() || !path.isRegularFile()) {
+            return "File is not available on disk."
+        }
+
+        val content = runCatching { Files.readString(path) }.getOrDefault("")
+        val body = if (content.isBlank()) "" else content.lineSequence().joinToString("\n") { "+$it" }
+        return buildString {
+            appendLine("diff --git a/$filePath b/$filePath")
+            appendLine("new file mode 100644")
+            appendLine("--- /dev/null")
+            appendLine("+++ b/$filePath")
+            appendLine("@@ -0,0 +1,${content.lineSequence().count()} @@")
+            append(body)
+        }.trimEnd()
     }
 
     private fun countLines(path: Path): Int {
@@ -158,144 +192,84 @@ class GitDiffService {
         GitFileStatus.MODIFIED, GitFileStatus.UNKNOWN -> 0
     }
 
-    private fun assessFiles(files: List<GitFileDelta>): List<GitFileDelta> {
-        val timestamps = files.mapNotNull { it.lastModifiedEpochMillis }.sorted()
-        val globalWindowMillis = when {
-            timestamps.size >= 2 -> (timestamps.last() - timestamps.first()).coerceAtLeast(0L)
-            timestamps.size == 1 -> 0L
-            else -> null
-        }
-
-        return files.map { file ->
-            val touchedLines = file.insertedLines + file.deletedLines
-            if (touchedLines == 0) return@map file
-
-            val timingFirst = globalWindowMillis != null && globalWindowMillis <= 300_000L
-            val spreadOut = globalWindowMillis != null && globalWindowMillis >= 1_200_000L
-
-            val estimatedAiLines: Int
-            val estimatedNonAiLines: Int
-            val classification: ChangeClassification
-            val confidence: ConfidenceLevel
-
-            when {
-                timingFirst && file.insertedLines > 0 -> {
-                    estimatedAiLines = file.insertedLines
-                    estimatedNonAiLines = file.deletedLines
-                    classification = ChangeClassification.ESTIMATED_AI_GENERATED
-                    confidence = if (globalWindowMillis <= 120_000L) ConfidenceLevel.MEDIUM else ConfidenceLevel.LOW
-                }
-
-                spreadOut -> {
-                    estimatedAiLines = 0
-                    estimatedNonAiLines = touchedLines
-                    classification = ChangeClassification.ESTIMATED_NON_AI
-                    confidence = ConfidenceLevel.MEDIUM
-                }
-
-                else -> {
-                    val likelyAi = when {
-                        file.deletedLines >= file.insertedLines * 2 && file.deletedLines >= 40 -> 0.20
-                        file.insertedLines <= 18 && file.deletedLines <= 12 -> 0.25
-                        else -> 0.50
-                    }
-                    estimatedAiLines = (touchedLines * likelyAi).roundToInt()
-                    estimatedNonAiLines = (touchedLines - estimatedAiLines).coerceAtLeast(0)
-                    classification = when {
-                        likelyAi <= 0.40 -> ChangeClassification.ESTIMATED_NON_AI
-                        else -> ChangeClassification.MIXED_OR_UNCLEAR
-                    }
-                    confidence = ConfidenceLevel.LOW
-                }
-            }
-
-            file.copy(
-                estimatedAiLines = estimatedAiLines,
-                estimatedNonAiLines = estimatedNonAiLines,
-                classification = classification,
-                confidence = confidence,
-            )
-        }
-    }
-
-    private fun assess(files: List<GitFileDelta>): GitHeuristicAssessment? {
-        if (files.isEmpty()) return null
-
-        val inserted = files.sumOf { it.insertedLines }
-        val deleted = files.sumOf { it.deletedLines }
-        val estimatedAiLines = files.sumOf { it.estimatedAiLines }
-        val estimatedNonAiLines = files.sumOf { it.estimatedNonAiLines }
-        val changedFiles = files.size
-        val untrackedOrAdded = files.count { it.status == GitFileStatus.UNTRACKED || it.status == GitFileStatus.ADDED }
-        val largeFiles = files.count { it.insertedLines >= 40 }
-        val avgTouchedLines = files.map { it.insertedLines + it.deletedLines }.average()
-        val timestamps = files.mapNotNull { it.lastModifiedEpochMillis }.sorted()
-        val latestChange = timestamps.maxOrNull()
-        val changeWindowMillis = when {
-            timestamps.size >= 2 -> (timestamps.last() - timestamps.first()).coerceAtLeast(0L)
-            timestamps.size == 1 -> 0L
-            else -> null
-        }
-
-        return when {
-            inserted >= 180 &&
-                changedFiles <= 6 &&
-                (untrackedOrAdded >= 2 || largeFiles >= 2) &&
-                changeWindowMillis != null &&
-                changeWindowMillis <= 120_000L ->
-                GitHeuristicAssessment(
-                    classification = ChangeClassification.ESTIMATED_AI_GENERATED,
-                    confidence = ConfidenceLevel.MEDIUM,
-                    rationale = "Git diff shows about $estimatedAiLines likely AI-assisted lines versus $estimatedNonAiLines likely non-AI lines, concentrated in a very short timestamp window. In the Git tab, timing now dominates the estimate.",
-                    latestChangeEpochMillis = latestChange,
-                    changeWindowMillis = changeWindowMillis,
-                )
-
-            inserted > 0 &&
-                changeWindowMillis != null &&
-                changeWindowMillis <= 300_000L ->
-                GitHeuristicAssessment(
-                    classification = ChangeClassification.ESTIMATED_AI_GENERATED,
-                    confidence = ConfidenceLevel.LOW,
-                    rationale = "Git diff suggests roughly $estimatedAiLines likely AI-assisted lines and $estimatedNonAiLines likely non-AI lines. The hint comes primarily from tightly clustered file timestamps in the same window.",
-                    latestChangeEpochMillis = latestChange,
-                    changeWindowMillis = changeWindowMillis,
-                )
-
-            deleted >= 120 && deleted > inserted * 2 ->
-                GitHeuristicAssessment(
-                    classification = ChangeClassification.ESTIMATED_NON_AI,
-                    confidence = ConfidenceLevel.LOW,
-                    rationale = "Git diff suggests roughly $estimatedNonAiLines likely non-AI lines and only $estimatedAiLines likely AI-assisted lines. The deletion-heavy pattern aligns more with manual refactoring or cleanup than bulk generation.",
-                    latestChangeEpochMillis = latestChange,
-                    changeWindowMillis = changeWindowMillis,
-                )
-
-            changedFiles >= 10 &&
-                avgTouchedLines <= 18.0 &&
-                changeWindowMillis != null &&
-                changeWindowMillis >= 1_200_000L ->
-                GitHeuristicAssessment(
-                    classification = ChangeClassification.ESTIMATED_NON_AI,
-                    confidence = ConfidenceLevel.MEDIUM,
-                    rationale = "Git diff suggests roughly $estimatedNonAiLines likely non-AI lines and $estimatedAiLines likely AI-assisted lines. Many small edits spread across a longer timestamp window more often match gradual manual work.",
-                    latestChangeEpochMillis = latestChange,
-                    changeWindowMillis = changeWindowMillis,
-                )
-
-            else ->
-                GitHeuristicAssessment(
-                    classification = ChangeClassification.MIXED_OR_UNCLEAR,
-                    confidence = ConfidenceLevel.LOW,
-                    rationale = "Git diff suggests around $estimatedAiLines likely AI-assisted lines and $estimatedNonAiLines likely non-AI lines, but the timestamp pattern is not decisive. Use Git as a complement to tracked edit events, not proof.",
-                    latestChangeEpochMillis = latestChange,
-                    changeWindowMillis = changeWindowMillis,
-                )
-        }
-    }
-
     private fun readLastModified(path: Path): Long? =
         runCatching { Files.getLastModifiedTime(path) }
             .map(FileTime::toMillis)
             .getOrNull()
+
+    private fun buildObservations(
+        projectRoot: Path,
+        repoRoot: Path,
+        files: List<GitFileDelta>,
+    ): List<GitFileObservation> {
+        if (files.isEmpty()) return emptyList()
+
+        val events = FlowMetricStore.projectStore(projectRoot).read().events
+        val fileByAbsolutePath = files.associateBy { repoRoot.resolve(it.filePath).normalize().toString() }
+
+        // Prefer tracked edit timestamps so the Git tab reflects when the user actually changed a file.
+        val eventBacked = events
+            .asSequence()
+            .mapNotNull { event ->
+                val normalizedPath = runCatching { Path.of(event.filePath).normalize().toString() }.getOrNull() ?: return@mapNotNull null
+                val gitFile = fileByAbsolutePath[normalizedPath] ?: return@mapNotNull null
+                GitFileObservation(
+                    id = event.id,
+                    filePath = gitFile.filePath,
+                    insertedLines = event.delta.inserted,
+                    deletedLines = event.delta.deleted,
+                    status = gitFile.status,
+                    observedAtEpochMillis = event.timestampEpochMillis,
+                    fileModifiedEpochMillis = gitFile.lastModifiedEpochMillis,
+                    fromTrackedEvents = true,
+                    linePatch = event.metadata.linePatch,
+                )
+            }
+            .toList()
+
+        // Keep Git-only files visible too, but let tracked edit events win when both sources hit the same bucket.
+        val gitFallback = files.map { file ->
+            GitFileObservation(
+                id = UUID.randomUUID().toString(),
+                filePath = file.filePath,
+                insertedLines = file.insertedLines,
+                deletedLines = file.deletedLines,
+                status = file.status,
+                observedAtEpochMillis = file.lastModifiedEpochMillis ?: System.currentTimeMillis(),
+                fileModifiedEpochMillis = file.lastModifiedEpochMillis,
+                fromTrackedEvents = false,
+                linePatch = null,
+            )
+        }
+
+        return normalizeObservations(eventBacked + gitFallback)
+    }
+
+    // Collapse noisy repeats into one entry per file per short time bucket.
+    // If both Git fallback and tracked edit events exist for the same bucket, prefer the tracked event.
+    private fun normalizeObservations(observations: List<GitFileObservation>): List<GitFileObservation> =
+        observations
+            .sortedByDescending { it.observedAtEpochMillis }
+            .groupBy { it.filePath to bucketStart(it.observedAtEpochMillis) }
+            .map { (_, grouped) ->
+                grouped.maxWith(
+                    compareBy<GitFileObservation> { it.fromTrackedEvents }
+                        .thenBy { it.observedAtEpochMillis },
+                )
+            }
+            .sortedByDescending { it.observedAtEpochMillis }
+
+    private fun bucketStart(epochMillis: Long): Long =
+        epochMillis - (epochMillis % OBSERVATION_BUCKET_MS)
+
+    private fun isTrackable(
+        projectRoot: Path,
+        repoRoot: Path,
+        delta: GitFileDelta,
+        config: FlowMetricProjectConfig,
+    ): Boolean = ProjectFileRules.isTrackable(projectRoot, repoRoot.resolve(delta.filePath), config)
+
+    companion object {
+        private const val OBSERVATION_BUCKET_MS = 2 * 60 * 1000L
+    }
 }

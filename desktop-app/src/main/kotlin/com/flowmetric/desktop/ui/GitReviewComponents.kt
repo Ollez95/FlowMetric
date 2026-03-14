@@ -4,18 +4,27 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.PrimaryTabRow
+import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -29,6 +38,9 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.flowmetric.desktop.git.GitDiffDocument
+import com.flowmetric.desktop.git.GitDiffLine
+import com.flowmetric.desktop.git.GitDiffLineKind
 import com.flowmetric.shared.model.GitCommitFileChange
 import com.flowmetric.shared.model.GitCommitSummary
 import com.flowmetric.shared.model.GitFileObservation
@@ -41,9 +53,12 @@ import java.util.Date
 internal fun GitSection(
     summary: GitWorkingTreeSummary?,
     selectedCommit: GitCommitSummary?,
+    isReverting: Boolean,
     onSelectObservation: (GitFileObservation) -> Unit,
     onSelectCommit: (GitCommitSummary) -> Unit,
     onSelectUncommitted: () -> Unit,
+    onRevertObservation: (GitFileObservation) -> Unit,
+    onRevertObservationGroup: (List<GitFileObservation>) -> Unit,
 ) {
     Card(shape = RoundedCornerShape(20.dp), modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -69,7 +84,13 @@ internal fun GitSection(
                     if (selectedCommit != null) {
                         CommitFilesSection(selectedCommit.files)
                     } else {
-                        UncommittedFilesSection(summary, onSelectObservation)
+                        UncommittedFilesSection(
+                            summary = summary,
+                            isReverting = isReverting,
+                            onSelectObservation = onSelectObservation,
+                            onRevertObservation = onRevertObservation,
+                            onRevertObservationGroup = onRevertObservationGroup,
+                        )
                     }
                 }
             }
@@ -147,10 +168,14 @@ private fun ScopeCard(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun UncommittedFilesSection(
     summary: GitWorkingTreeSummary,
+    isReverting: Boolean,
     onSelectObservation: (GitFileObservation) -> Unit,
+    onRevertObservation: (GitFileObservation) -> Unit,
+    onRevertObservationGroup: (List<GitFileObservation>) -> Unit,
 ) {
     if (summary.observations.isEmpty()) {
         Text(summary.message ?: "Working tree is clean.")
@@ -167,84 +192,226 @@ private fun UncommittedFilesSection(
     val groupedObservations = observationGroups(summary.observations)
     val pageCount = groupedObservations.pageCount(UNCOMMITTED_GROUPS_PER_PAGE)
     var pageIndex by remember(summary.observations) { mutableStateOf(0) }
+    var selectedTab by remember(summary.observations) { mutableStateOf(UncommittedTab.FILES) }
     val safePageIndex = pageIndex.coerceIn(0, (pageCount - 1).coerceAtLeast(0))
     val visibleGroups = groupedObservations.pageSlice(safePageIndex, UNCOMMITTED_GROUPS_PER_PAGE)
 
     Text("Uncommitted file history", fontWeight = FontWeight.SemiBold)
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            "Page ${safePageIndex + 1} of ${pageCount.coerceAtLeast(1)}",
-            color = Color(0xFF49616D),
-            fontSize = 12.sp,
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(
-                onClick = { pageIndex = (safePageIndex - 1).coerceAtLeast(0) },
-                enabled = safePageIndex > 0,
-            ) {
-                Text("Previous")
-            }
-            Button(
-                onClick = { pageIndex = (safePageIndex + 1).coerceAtMost(pageCount - 1) },
-                enabled = safePageIndex < pageCount - 1,
-            ) {
-                Text("Next")
+    Card(shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
+        PrimaryTabRow(selectedTabIndex = selectedTab.ordinal) {
+            UncommittedTab.entries.forEach { tab ->
+                Tab(
+                    selected = selectedTab == tab,
+                    onClick = { selectedTab = tab },
+                    text = { Text(tab.title) },
+                )
             }
         }
     }
-    visibleGroups.forEachIndexed { index, group ->
-        val accent = timelineColors[index % timelineColors.size]
-        Card(
-            shape = RoundedCornerShape(18.dp),
-            modifier = Modifier
-                .fillMaxWidth()
-                .border(1.dp, accent.copy(alpha = 0.35f), RoundedCornerShape(18.dp)),
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(accent.copy(alpha = 0.08f))
-                    .padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+    when (selectedTab) {
+        UncommittedTab.FILES -> {
+            Text(
+                "${summary.files.size} current file${if (summary.files.size == 1) "" else "s"} changed",
+                color = Color(0xFF49616D),
+                fontSize = 12.sp,
+            )
+            CurrentChangedFilesSection(
+                summary = summary,
+                isReverting = isReverting,
+                onSelectObservation = onSelectObservation,
+                onRevertObservation = onRevertObservation,
+            )
+        }
+
+        UncommittedTab.HISTORY -> {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    "Changed around ${formatTimestamp(group.first().observedAtEpochMillis)}",
-                    color = accent,
+                    "Page ${safePageIndex + 1} of ${pageCount.coerceAtLeast(1)}",
+                    color = Color(0xFF49616D),
                     fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold,
                 )
-                group.forEach { observation ->
-                    Row(
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        onClick = { pageIndex = (safePageIndex - 1).coerceAtLeast(0) },
+                        enabled = safePageIndex > 0,
+                    ) {
+                        Text("Previous")
+                    }
+                    Button(
+                        onClick = { pageIndex = (safePageIndex + 1).coerceAtMost(pageCount - 1) },
+                        enabled = safePageIndex < pageCount - 1,
+                    ) {
+                        Text("Next")
+                    }
+                }
+            }
+            visibleGroups.forEachIndexed { index, group ->
+                val accent = timelineColors[index % timelineColors.size]
+                val uniqueFiles = group.map { it.filePath }.distinct()
+                val newestTimestamp = group.maxOf { it.observedAtEpochMillis }
+                val oldestTimestamp = group.minOf { it.observedAtEpochMillis }
+                Card(
+                    shape = RoundedCornerShape(18.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(1.dp, accent.copy(alpha = 0.35f), RoundedCornerShape(18.dp)),
+                ) {
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .background(Color(0xFFF7F4EE), RoundedCornerShape(14.dp))
-                            .clickable { onSelectObservation(observation) }
+                            .background(accent.copy(alpha = 0.08f))
                             .padding(12.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(observation.filePath, fontWeight = FontWeight.Medium)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
                             Text(
-                                gitStatusLabel(observation.status),
-                                color = gitStatusColor(observation.status),
+                                "Changed around ${formatTimestamp(group.first().observedAtEpochMillis)}",
+                                color = accent,
                                 fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
                             )
-                            Text(
-                                "Changed: ${formatTimestamp(observation.observedAtEpochMillis)}",
-                                color = Color(0xFF6B7B83),
-                                fontSize = 12.sp,
+                            RevertActionButton(
+                                enabled = !isReverting,
+                                onClick = { onRevertObservationGroup(group) },
                             )
                         }
-                        Text("+${observation.insertedLines} / -${observation.deletedLines}")
+                        Card(shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(Color.White)
+                                    .padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                ) {
+                                    Text(
+                                        "History: ${formatTimestamp(oldestTimestamp)} to ${formatTimestamp(newestTimestamp)}",
+                                        color = Color(0xFF49616D),
+                                        fontSize = 12.sp,
+                                    )
+                                    Text(
+                                        "${uniqueFiles.size} file${if (uniqueFiles.size == 1) "" else "s"} changed",
+                                        color = Color(0xFF49616D),
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Medium,
+                                    )
+                                }
+                                Text(
+                                    "Files: ${uniqueFiles.joinToString(", ")}",
+                                    color = Color(0xFF6B7B83),
+                                    fontSize = 12.sp,
+                                )
+                            }
+                        }
+                        group.forEach { observation ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(Color(0xFFF7F4EE), RoundedCornerShape(14.dp))
+                                    .clickable { onSelectObservation(observation) }
+                                    .padding(12.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(observation.filePath, fontWeight = FontWeight.Medium)
+                                    Text(
+                                        gitStatusLabel(observation.status),
+                                        color = gitStatusColor(observation.status),
+                                        fontSize = 12.sp,
+                                    )
+                                    Text(
+                                        "Changed: ${formatTimestamp(observation.observedAtEpochMillis)}",
+                                        color = Color(0xFF6B7B83),
+                                        fontSize = 12.sp,
+                                    )
+                                }
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text("+${observation.insertedLines} / -${observation.deletedLines}")
+                                    RevertActionButton(
+                                        enabled = !isReverting,
+                                        onClick = { onRevertObservation(observation) },
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
     }
+}
+
+@Composable
+private fun CurrentChangedFilesSection(
+    summary: GitWorkingTreeSummary,
+    isReverting: Boolean,
+    onSelectObservation: (GitFileObservation) -> Unit,
+    onRevertObservation: (GitFileObservation) -> Unit,
+) {
+    val latestObservationByFile = summary.observations
+        .sortedByDescending { it.observedAtEpochMillis }
+        .associateBy { it.filePath }
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        summary.files.forEach { file ->
+            val observation = latestObservationByFile[file.filePath]
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFFF7F4EE), RoundedCornerShape(14.dp))
+                    .clickable(enabled = observation != null) { observation?.let(onSelectObservation) }
+                    .padding(12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(file.filePath, fontWeight = FontWeight.Medium)
+                    Text(
+                        gitStatusLabel(file.status),
+                        color = gitStatusColor(file.status),
+                        fontSize = 12.sp,
+                    )
+                    observation?.let {
+                        Text(
+                            "Latest change: ${formatTimestamp(it.observedAtEpochMillis)}",
+                            color = Color(0xFF6B7B83),
+                            fontSize = 12.sp,
+                        )
+                    }
+                }
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("+${file.insertedLines} / -${file.deletedLines}")
+                    observation?.let {
+                        RevertActionButton(
+                            enabled = !isReverting,
+                            onClick = { onRevertObservation(it) },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+private enum class UncommittedTab(val title: String) {
+    FILES("Files Changed"),
+    HISTORY("History"),
 }
 
 @Composable
@@ -292,6 +459,10 @@ internal fun GitDetailPanel(
     selectedCommit: GitCommitSummary?,
     selectedObservation: GitFileObservation?,
     diffPreview: String?,
+    diffDocument: GitDiffDocument?,
+    isReverting: Boolean,
+    onRevertHunk: (Int) -> Unit,
+    onRevertLine: (Int, Int) -> Unit,
 ) {
     Card(modifier = modifier, shape = RoundedCornerShape(24.dp)) {
         Column(modifier = Modifier.fillMaxSize().padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -345,10 +516,20 @@ internal fun GitDetailPanel(
                     Card(shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth().weight(1f)) {
                         Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Text("Changed lines", fontWeight = FontWeight.SemiBold)
-                            GitDiffPreview(
-                                diffPreview = diffPreview,
-                                modifier = Modifier.fillMaxWidth().weight(1f),
-                            )
+                            if (diffDocument != null) {
+                                GitDiffActions(
+                                    diffDocument = diffDocument,
+                                    isReverting = isReverting,
+                                    onRevertHunk = onRevertHunk,
+                                    onRevertLine = onRevertLine,
+                                    modifier = Modifier.fillMaxWidth().weight(1f),
+                                )
+                            } else {
+                                GitDiffPreview(
+                                    diffPreview = diffPreview,
+                                    modifier = Modifier.fillMaxWidth().weight(1f),
+                                )
+                            }
                         }
                     }
                 }
@@ -379,6 +560,108 @@ internal fun GitDiffPreview(diffPreview: String?, modifier: Modifier = Modifier)
                 fontSize = 12.sp,
             )
         }
+    }
+}
+
+@Composable
+private fun GitDiffActions(
+    diffDocument: GitDiffDocument,
+    isReverting: Boolean,
+    onRevertHunk: (Int) -> Unit,
+    onRevertLine: (Int, Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier
+            .background(Color(0xFFFBF8F2), RoundedCornerShape(14.dp))
+            .verticalScroll(rememberScrollState())
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        diffDocument.hunks.forEachIndexed { hunkIndex, hunk ->
+            Card(
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color.White)
+                        .padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(hunk.header, color = Color(0xFFB7791F), fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                        FilledTonalIconButton(
+                            onClick = { onRevertHunk(hunkIndex) },
+                            enabled = !isReverting,
+                        ) {
+                            RevertActionContent(isReverting)
+                        }
+                    }
+                    hunk.lines.forEachIndexed { lineIndex, line ->
+                        GitDiffActionLine(
+                            line = line,
+                            isReverting = isReverting,
+                            onRevert = if (line.kind == GitDiffLineKind.ADDED || line.kind == GitDiffLineKind.REMOVED) {
+                                { onRevertLine(hunkIndex, lineIndex) }
+                            } else {
+                                null
+                            },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GitDiffActionLine(
+    line: GitDiffLine,
+    isReverting: Boolean,
+    onRevert: (() -> Unit)?,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Text(
+            text = line.rawLine.ifEmpty { " " },
+            color = gitDiffLineColor(line.rawLine),
+            fontFamily = FontFamily.Monospace,
+            fontSize = 12.sp,
+            modifier = Modifier.weight(1f),
+        )
+        if (onRevert != null) {
+            FilledTonalIconButton(onClick = onRevert, enabled = !isReverting) {
+                RevertActionContent(isReverting = false)
+            }
+        }
+    }
+}
+
+@Composable
+private fun RevertActionButton(
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    FilledTonalIconButton(onClick = onClick, enabled = enabled) {
+        RevertActionContent(isReverting = false)
+    }
+}
+
+@Composable
+private fun RevertActionContent(isReverting: Boolean) {
+    if (isReverting) {
+        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+    } else {
+        Text("↶", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
     }
 }
 

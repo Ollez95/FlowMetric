@@ -77,6 +77,7 @@ fun FlowMetricApp(viewModel: FlowMetricViewModel = remember { FlowMetricViewMode
                     onPathChanged = viewModel::updateProjectPathInput,
                     onRecentProjectSelected = viewModel::setProjectPath,
                     onRecentProjectRemoved = viewModel::removeRecentProject,
+                    onRecentProjectsReordered = viewModel::reorderRecentProjects,
                     onBrowse = {
                         val chooser = JFileChooser().apply { fileSelectionMode = JFileChooser.DIRECTORIES_ONLY }
                         if (chooser.showOpenDialog(null) == JFileChooser.APPROVE_OPTION) {
@@ -112,9 +113,12 @@ fun FlowMetricApp(viewModel: FlowMetricViewModel = remember { FlowMetricViewMode
                         AnalyticsTab.GIT -> GitSection(
                             summary = viewModel.gitSummary,
                             selectedCommit = viewModel.selectedGitCommit,
+                            isReverting = viewModel.isGitReverting,
                             onSelectObservation = viewModel::selectGitObservation,
                             onSelectCommit = viewModel::selectGitCommit,
                             onSelectUncommitted = viewModel::selectUncommittedChanges,
+                            onRevertObservation = viewModel::revertGitObservation,
+                            onRevertObservationGroup = viewModel::revertGitObservationGroup,
                         )
                         AnalyticsTab.EVENTS -> {
                             if (viewModel.snapshot.events.isEmpty()) {
@@ -136,6 +140,10 @@ fun FlowMetricApp(viewModel: FlowMetricViewModel = remember { FlowMetricViewMode
                     selectedCommit = viewModel.selectedGitCommit,
                     selectedObservation = viewModel.selectedGitObservation,
                     diffPreview = viewModel.gitDiffPreview,
+                    diffDocument = viewModel.gitDiffDocument,
+                    isReverting = viewModel.isGitReverting,
+                    onRevertHunk = viewModel::revertSelectedGitHunk,
+                    onRevertLine = viewModel::revertSelectedGitLine,
                 )
                 AnalyticsTab.EVENTS -> DetailPanel(
                     modifier = Modifier.weight(0.9f).fillMaxHeight(),

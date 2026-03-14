@@ -148,6 +148,197 @@ class GitDiffService {
         ).ifBlank { "No commit diff available." }
     }
 
+    fun parseSingleFileDiff(diffText: String): GitDiffDocument? {
+        val lines = diffText.lines()
+        if (lines.none { it.startsWith("@@") }) return null
+
+        val headerLines = mutableListOf<String>()
+        val hunks = mutableListOf<GitDiffHunk>()
+        var index = 0
+        var filePath: String? = null
+
+        while (index < lines.size && !lines[index].startsWith("@@")) {
+            val line = lines[index]
+            headerLines += line
+            if (line.startsWith("+++ b/")) {
+                filePath = line.removePrefix("+++ b/")
+            }
+            index += 1
+        }
+
+        while (index < lines.size) {
+            val header = lines[index]
+            val match = HUNK_HEADER_REGEX.matchEntire(header) ?: break
+            val oldStart = match.groupValues[1].toInt()
+            val oldCount = match.groupValues[2].ifBlank { "1" }.toInt()
+            val newStart = match.groupValues[3].toInt()
+            val newCount = match.groupValues[4].ifBlank { "1" }.toInt()
+            index += 1
+
+            val hunkLines = mutableListOf<GitDiffLine>()
+            var currentOld = oldStart
+            var currentNew = newStart
+
+            while (index < lines.size && !lines[index].startsWith("@@")) {
+                val rawLine = lines[index]
+                when {
+                    rawLine.startsWith("\\") -> {
+                        hunkLines += GitDiffLine(
+                            rawLine = rawLine,
+                            kind = GitDiffLineKind.META,
+                            oldLineNumber = null,
+                            newLineNumber = null,
+                            patchOldStart = null,
+                            patchNewStart = null,
+                        )
+                    }
+
+                    rawLine.startsWith("+") -> {
+                        hunkLines += GitDiffLine(
+                            rawLine = rawLine,
+                            kind = GitDiffLineKind.ADDED,
+                            oldLineNumber = null,
+                            newLineNumber = currentNew,
+                            patchOldStart = currentOld,
+                            patchNewStart = currentNew,
+                        )
+                        currentNew += 1
+                    }
+
+                    rawLine.startsWith("-") -> {
+                        hunkLines += GitDiffLine(
+                            rawLine = rawLine,
+                            kind = GitDiffLineKind.REMOVED,
+                            oldLineNumber = currentOld,
+                            newLineNumber = null,
+                            patchOldStart = currentOld,
+                            patchNewStart = currentNew,
+                        )
+                        currentOld += 1
+                    }
+
+                    else -> {
+                        hunkLines += GitDiffLine(
+                            rawLine = rawLine,
+                            kind = GitDiffLineKind.CONTEXT,
+                            oldLineNumber = currentOld,
+                            newLineNumber = currentNew,
+                            patchOldStart = null,
+                            patchNewStart = null,
+                        )
+                        currentOld += 1
+                        currentNew += 1
+                    }
+                }
+                index += 1
+            }
+
+            hunks += GitDiffHunk(
+                header = header,
+                oldStart = oldStart,
+                oldCount = oldCount,
+                newStart = newStart,
+                newCount = newCount,
+                lines = hunkLines,
+            )
+        }
+
+        return GitDiffDocument(
+            filePath = filePath ?: "",
+            headerLines = headerLines,
+            hunks = hunks,
+        )
+    }
+
+    fun decoratePatchForObservation(observation: GitFileObservation, patchText: String): String {
+        if (patchText.startsWith("diff --git") || patchText.startsWith("--- ") || patchText.startsWith("+++ ")) {
+            return patchText
+        }
+
+        val path = observation.filePath
+        val header = when (observation.status) {
+            GitFileStatus.UNTRACKED, GitFileStatus.ADDED -> listOf(
+                "diff --git a/$path b/$path",
+                "new file mode 100644",
+                "--- /dev/null",
+                "+++ b/$path",
+            )
+            GitFileStatus.DELETED -> listOf(
+                "diff --git a/$path b/$path",
+                "deleted file mode 100644",
+                "--- a/$path",
+                "+++ /dev/null",
+            )
+            else -> listOf(
+                "diff --git a/$path b/$path",
+                "--- a/$path",
+                "+++ b/$path",
+            )
+        }
+
+        return buildString {
+            header.forEach(::appendLine)
+            append(patchText)
+        }
+    }
+
+    fun revertHunk(projectRoot: Path, document: GitDiffDocument, hunkIndex: Int): GitRevertResult {
+        val hunk = document.hunks.getOrNull(hunkIndex)
+            ?: return GitRevertResult(success = false, message = "Hunk is no longer available.")
+        val patchText = buildString {
+            headerLinesFor(document).forEach(::appendLine)
+            appendLine(hunk.header)
+            hunk.lines.forEach { appendLine(it.rawLine) }
+        }.trimEnd()
+        val patchResult = applyReversePatch(projectRoot, patchText)
+        return if (patchResult.success) {
+            patchResult
+        } else {
+            applyTextualHunkRevert(projectRoot, document, hunkIndex)
+        }
+    }
+
+    fun revertLine(projectRoot: Path, document: GitDiffDocument, hunkIndex: Int, lineIndex: Int): GitRevertResult {
+        val hunk = document.hunks.getOrNull(hunkIndex)
+            ?: return GitRevertResult(success = false, message = "Hunk is no longer available.")
+        val line = hunk.lines.getOrNull(lineIndex)
+            ?: return GitRevertResult(success = false, message = "Line is no longer available.")
+        if (line.kind !in setOf(GitDiffLineKind.ADDED, GitDiffLineKind.REMOVED)) {
+            return GitRevertResult(success = false, message = "Only changed lines can be reverted.")
+        }
+
+        return applyTextualLineRevert(projectRoot, document, hunkIndex, lineIndex)
+    }
+
+    fun revertObservation(projectRoot: Path, observation: GitFileObservation): GitRevertResult {
+        return when (observation.status) {
+            GitFileStatus.UNTRACKED, GitFileStatus.ADDED -> deleteAddedFile(projectRoot, observation)
+            GitFileStatus.DELETED -> restoreDeletedFile(projectRoot, observation)
+            else -> revertModifiedFile(projectRoot, observation)
+        }
+    }
+
+    fun revertObservationGroup(projectRoot: Path, observations: List<GitFileObservation>): GitRevertResult {
+        if (observations.isEmpty()) {
+            return GitRevertResult(success = false, message = "No files are available to revert.")
+        }
+
+        observations.forEach { observation ->
+            val result = revertObservation(projectRoot, observation)
+            if (!result.success) {
+                return GitRevertResult(
+                    success = false,
+                    message = "Stopped while reverting `${observation.filePath}`. ${result.message}",
+                )
+            }
+        }
+
+        return GitRevertResult(
+            success = true,
+            message = "Reverted ${observations.size} file change(s) from the selected time block.",
+        )
+    }
+
     private fun runGit(workingDirectory: Path, vararg args: String): String {
         val process = ProcessBuilder(listOf("git", *args))
             .directory(workingDirectory.toFile())
@@ -174,6 +365,243 @@ class GitDiffService {
             appendLine("@@ -0,0 +1,${content.lineSequence().count()} @@")
             append(body)
         }.trimEnd()
+    }
+
+    private fun applyTextualHunkRevert(
+        projectRoot: Path,
+        document: GitDiffDocument,
+        hunkIndex: Int,
+    ): GitRevertResult {
+        val hunk = document.hunks.getOrNull(hunkIndex)
+            ?: return GitRevertResult(success = false, message = "Hunk is no longer available.")
+        val filePath = resolveDocumentPath(projectRoot, document)
+            ?: return GitRevertResult(success = false, message = "File is not available on disk.")
+        if (!filePath.exists() || !filePath.isRegularFile()) {
+            return GitRevertResult(success = false, message = "File is not available on disk.")
+        }
+
+        return runCatching {
+            val lines = Files.readAllLines(filePath).toMutableList()
+            applyHunkToLines(lines, hunk)
+            Files.write(filePath, lines)
+            GitRevertResult(success = true, message = "Reverted the selected block.")
+        }.getOrElse { error ->
+            GitRevertResult(success = false, message = error.message ?: "Could not revert the selected block.")
+        }
+    }
+
+    private fun revertModifiedFile(projectRoot: Path, observation: GitFileObservation): GitRevertResult {
+        val patchText = diffForFile(projectRoot, observation.filePath, observation.status)
+        if (patchText.isBlank()) {
+            return GitRevertResult(success = false, message = "No current patch is available for this file.")
+        }
+
+        val document = parseSingleFileDiff(patchText)
+            ?: return GitRevertResult(success = false, message = "Could not parse the current file diff.")
+        val filePath = resolveDocumentPath(projectRoot, document)
+            ?: return GitRevertResult(success = false, message = "File is not available on disk.")
+        if (!filePath.exists() || !filePath.isRegularFile()) {
+            return GitRevertResult(success = false, message = "File is not available on disk.")
+        }
+
+        return runCatching {
+            val lines = Files.readAllLines(filePath).toMutableList()
+            document.hunks.asReversed().forEach { hunk ->
+                applyHunkToLines(lines, hunk)
+            }
+            Files.write(filePath, lines)
+            GitRevertResult(success = true, message = "Reverted the selected file.")
+        }.getOrElse { error ->
+            GitRevertResult(success = false, message = error.message ?: "Could not revert the selected file.")
+        }
+    }
+
+    private fun deleteAddedFile(projectRoot: Path, observation: GitFileObservation): GitRevertResult {
+        val path = resolveObservationPath(projectRoot, observation)
+            ?: return GitRevertResult(success = false, message = "File is not available on disk.")
+        return runCatching {
+            Files.deleteIfExists(path)
+            GitRevertResult(success = true, message = "Removed the added file.")
+        }.getOrElse { error ->
+            GitRevertResult(success = false, message = error.message ?: "Could not remove the added file.")
+        }
+    }
+
+    private fun restoreDeletedFile(projectRoot: Path, observation: GitFileObservation): GitRevertResult {
+        val repoRoot = runGit(projectRoot, "rev-parse", "--show-toplevel").trim()
+        if (repoRoot.isBlank()) {
+            return GitRevertResult(success = false, message = "Git repository not available.")
+        }
+
+        val previousContent = runGit(Path.of(repoRoot), "show", "HEAD:${observation.filePath}")
+        if (previousContent.isBlank()) {
+            return GitRevertResult(success = false, message = "Could not load the deleted file from HEAD.")
+        }
+
+        val path = resolveObservationPath(projectRoot, observation)
+            ?: return GitRevertResult(success = false, message = "File path could not be resolved.")
+        return runCatching {
+            path.parent?.let(Files::createDirectories)
+            Files.writeString(path, previousContent)
+            GitRevertResult(success = true, message = "Restored the deleted file.")
+        }.getOrElse { error ->
+            GitRevertResult(success = false, message = error.message ?: "Could not restore the deleted file.")
+        }
+    }
+
+    private fun applyTextualLineRevert(
+        projectRoot: Path,
+        document: GitDiffDocument,
+        hunkIndex: Int,
+        lineIndex: Int,
+    ): GitRevertResult {
+        val hunk = document.hunks.getOrNull(hunkIndex)
+            ?: return GitRevertResult(success = false, message = "Hunk is no longer available.")
+        val filePath = resolveDocumentPath(projectRoot, document)
+            ?: return GitRevertResult(success = false, message = "File is not available on disk.")
+        if (!filePath.exists() || !filePath.isRegularFile()) {
+            return GitRevertResult(success = false, message = "File is not available on disk.")
+        }
+
+        return runCatching {
+            val lines = Files.readAllLines(filePath).toMutableList()
+            applySingleLineRevert(lines, hunk, lineIndex)
+            Files.write(filePath, lines)
+            GitRevertResult(success = true, message = "Reverted the selected line.")
+        }.getOrElse { error ->
+            GitRevertResult(success = false, message = error.message ?: "Could not revert the selected line.")
+        }
+    }
+
+    private fun resolveDocumentPath(projectRoot: Path, document: GitDiffDocument): Path? {
+        if (document.filePath.isBlank()) return null
+        val repoRoot = runGit(projectRoot, "rev-parse", "--show-toplevel").trim()
+        if (repoRoot.isBlank()) return null
+        return Path.of(repoRoot).resolve(document.filePath)
+    }
+
+    private fun resolveObservationPath(projectRoot: Path, observation: GitFileObservation): Path? {
+        val repoRoot = runGit(projectRoot, "rev-parse", "--show-toplevel").trim()
+        if (repoRoot.isBlank()) return null
+        return Path.of(repoRoot).resolve(observation.filePath)
+    }
+
+    // Fallback path for historical or minimal patches: replay the inverse of the hunk directly on the current file.
+    private fun applyHunkToLines(
+        lines: MutableList<String>,
+        hunk: GitDiffHunk,
+    ) {
+        var cursor = (hunk.newStart - 1).coerceAtLeast(0)
+        hunk.lines.forEach { line ->
+            when (line.kind) {
+                GitDiffLineKind.CONTEXT -> cursor += 1
+                GitDiffLineKind.ADDED -> removeMatchingLine(lines, cursor, line.rawLine.drop(1))
+                GitDiffLineKind.REMOVED -> {
+                    lines.add(cursor.coerceIn(0, lines.size), line.rawLine.drop(1))
+                    cursor += 1
+                }
+                GitDiffLineKind.META -> Unit
+            }
+        }
+    }
+
+    private fun applySingleLineRevert(
+        lines: MutableList<String>,
+        hunk: GitDiffHunk,
+        lineIndex: Int,
+    ) {
+        var cursor = (hunk.newStart - 1).coerceAtLeast(0)
+        hunk.lines.forEachIndexed { index, line ->
+            when (line.kind) {
+                GitDiffLineKind.CONTEXT -> cursor += 1
+                GitDiffLineKind.ADDED -> {
+                    if (index == lineIndex) {
+                        removeMatchingLine(lines, cursor, line.rawLine.drop(1))
+                        return
+                    }
+                    cursor += 1
+                }
+                GitDiffLineKind.REMOVED -> {
+                    if (index == lineIndex) {
+                        lines.add(cursor.coerceIn(0, lines.size), line.rawLine.drop(1))
+                        return
+                    }
+                }
+                GitDiffLineKind.META -> Unit
+            }
+        }
+        error("The selected line can no longer be matched in the current file.")
+    }
+
+    private fun removeMatchingLine(
+        lines: MutableList<String>,
+        cursor: Int,
+        expectedContent: String,
+    ) {
+        val safeCursor = cursor.coerceIn(0, lines.lastIndex.coerceAtLeast(0))
+        val directMatch = lines.getOrNull(safeCursor)
+        if (directMatch == expectedContent) {
+            lines.removeAt(safeCursor)
+            return
+        }
+
+        val nearbyIndex = ((safeCursor - 3).coerceAtLeast(0)..(safeCursor + 3).coerceAtMost(lines.lastIndex))
+            .firstOrNull { lines[it] == expectedContent }
+        if (nearbyIndex != null) {
+            lines.removeAt(nearbyIndex)
+            return
+        }
+
+        error("The selected line can no longer be matched in the current file.")
+    }
+
+    private fun currentPatchForObservation(projectRoot: Path, observation: GitFileObservation): String {
+        val trackedPatch = observation.linePatch
+        return when {
+            !trackedPatch.isNullOrBlank() && observation.status !in setOf(GitFileStatus.UNTRACKED, GitFileStatus.ADDED) ->
+                decoratePatchForObservation(observation, trackedPatch)
+            else -> diffForFile(projectRoot, observation.filePath, observation.status)
+        }
+    }
+
+    private fun headerLinesFor(document: GitDiffDocument): List<String> =
+        if (document.headerLines.isNotEmpty()) {
+            document.headerLines
+        } else {
+            listOf(
+                "diff --git a/${document.filePath} b/${document.filePath}",
+                "--- a/${document.filePath}",
+                "+++ b/${document.filePath}",
+            )
+        }
+
+    private fun applyReversePatch(projectRoot: Path, patchText: String): GitRevertResult {
+        val repoRoot = runGit(projectRoot, "rev-parse", "--show-toplevel").trim()
+        if (repoRoot.isBlank()) {
+            return GitRevertResult(success = false, message = "Git repository not available.")
+        }
+
+        val process = ProcessBuilder(
+            listOf("git", "apply", "-R", "--recount", "--unidiff-zero", "--whitespace=nowarn", "-"),
+        )
+            .directory(Path.of(repoRoot).toFile())
+            .redirectErrorStream(true)
+            .start()
+
+        process.outputStream.bufferedWriter().use { writer ->
+            writer.write(patchText)
+        }
+        val output = process.inputStream.bufferedReader().use { it.readText().trim() }
+        val exitCode = process.waitFor()
+
+        return if (exitCode == 0) {
+            GitRevertResult(success = true, message = "Reverted the selected Git change.")
+        } else {
+            GitRevertResult(
+                success = false,
+                message = output.ifBlank { "Git could not revert the selected patch." },
+            )
+        }
     }
 
     private fun parseRecentCommits(repoRoot: Path): List<GitCommitSummary> {
@@ -379,5 +807,6 @@ class GitDiffService {
     companion object {
         private const val OBSERVATION_BUCKET_MS = 2 * 60 * 1000L
         private const val RECENT_COMMITS_LIMIT = 15
+        private val HUNK_HEADER_REGEX = Regex("""@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@.*""")
     }
 }

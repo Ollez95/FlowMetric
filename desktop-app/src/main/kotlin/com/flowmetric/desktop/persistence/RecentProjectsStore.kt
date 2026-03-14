@@ -38,6 +38,15 @@ class RecentProjectsStore(
         write(read().filterNot { it == normalized })
     }
 
+    fun replaceAll(paths: List<String>) {
+        val normalized = paths
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .distinct()
+            .takeLast(MAX_RECENT_PROJECTS)
+        write(normalized)
+    }
+
     private fun write(paths: List<String>) {
         storePath.parent?.createDirectories()
         storePath.bufferedWriter().use { writer ->

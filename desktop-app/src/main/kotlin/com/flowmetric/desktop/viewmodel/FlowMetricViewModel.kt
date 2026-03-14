@@ -4,6 +4,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.flowmetric.desktop.git.GitDiffService
+import com.flowmetric.desktop.git.GitDiffDocument
 import com.flowmetric.desktop.persistence.RecentProjectsStore
 import com.flowmetric.desktop.tracking.DesktopExternalEventRecorder
 import com.flowmetric.desktop.watch.ProjectChangeBatch
@@ -83,6 +84,12 @@ class FlowMetricViewModel(
     var gitDiffPreview by mutableStateOf<String?>(null)
         private set
 
+    var gitDiffDocument by mutableStateOf<GitDiffDocument?>(null)
+        private set
+
+    var isGitReverting by mutableStateOf(false)
+        private set
+
     var projectConfig by mutableStateOf(FlowMetricProjectConfig())
         private set
 
@@ -121,6 +128,7 @@ class FlowMetricViewModel(
             selectedGitObservation = null
             selectedGitCommit = null
             gitDiffPreview = null
+            gitDiffDocument = null
             isLoading = true
             statusMessage = "Loading project analytics..."
         }
@@ -150,11 +158,21 @@ class FlowMetricViewModel(
             selectedGitObservation = null
             selectedGitCommit = null
             gitDiffPreview = null
+            gitDiffDocument = null
             projectConfig = FlowMetricProjectConfig()
             isLoading = false
             statusMessage = "Recent project removed."
             projectWatchService.stop()
         }
+    }
+
+    fun reorderRecentProjects(paths: List<String>) {
+        val normalizedPaths = paths
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .distinct()
+        recentProjectsStore.replaceAll(normalizedPaths)
+        recentProjects = recentProjectsStore.read()
     }
 
     fun applySelectedProjectPathOrRefresh() {
@@ -167,6 +185,7 @@ class FlowMetricViewModel(
             selectedGitObservation = null
             selectedGitCommit = null
             gitDiffPreview = null
+            gitDiffDocument = null
             projectConfig = FlowMetricProjectConfig()
             statusMessage = null
             projectWatchService.stop()
@@ -204,6 +223,7 @@ class FlowMetricViewModel(
             selectedGitObservation = null
             selectedGitCommit = null
             gitDiffPreview = null
+            gitDiffDocument = null
             projectConfig = FlowMetricProjectConfig()
             statusMessage = null
             projectWatchService.stop()
@@ -274,18 +294,24 @@ class FlowMetricViewModel(
     fun selectGitObservation(observation: GitFileObservation) {
         selectedGitCommit = null
         selectedGitObservation = observation
-        if (!observation.linePatch.isNullOrBlank()) {
-            gitDiffPreview = observation.linePatch
+        val trackedPatch = observation.linePatch
+        if (!trackedPatch.isNullOrBlank()) {
+            gitDiffPreview = trackedPatch
+            gitDiffDocument = gitDiffService.parseSingleFileDiff(
+                gitDiffService.decoratePatchForObservation(observation, trackedPatch),
+            )
             return
         }
 
         if (observation.fromTrackedEvents) {
             gitDiffPreview =
                 "FlowMetric tracked this change time, but it was recorded before per-change line snapshots were enabled."
+            gitDiffDocument = null
             return
         }
 
         gitDiffPreview = "Loading diff..."
+        gitDiffDocument = null
 
         val projectPath = selectedProjectPath
         scope.launch {
@@ -294,6 +320,7 @@ class FlowMetricViewModel(
             }
             if (selectedGitObservation?.id == observation.id) {
                 gitDiffPreview = diff
+                gitDiffDocument = gitDiffService.parseSingleFileDiff(diff)
             }
         }
     }
@@ -302,6 +329,7 @@ class FlowMetricViewModel(
         selectedGitObservation = null
         selectedGitCommit = commit
         gitDiffPreview = "Loading commit diff..."
+        gitDiffDocument = null
 
         val projectPath = selectedProjectPath
         scope.launch {
@@ -318,6 +346,101 @@ class FlowMetricViewModel(
         selectedGitCommit = null
         if (selectedGitObservation == null) {
             gitDiffPreview = null
+            gitDiffDocument = null
+        }
+    }
+
+    fun revertSelectedGitHunk(hunkIndex: Int) {
+        val projectPath = selectedProjectPath
+        val document = gitDiffDocument ?: run {
+            statusMessage = "No revertable Git patch is loaded."
+            return
+        }
+
+        if (projectPath.isBlank()) return
+        isGitReverting = true
+        statusMessage = "Reverting selected block..."
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                gitDiffService.revertHunk(Path.of(projectPath), document, hunkIndex)
+            }
+            isGitReverting = false
+            statusMessage = result.message
+            if (result.success) {
+                selectedGitObservation = null
+                gitDiffPreview = null
+                gitDiffDocument = null
+                refresh(recountProjectLines = false)
+            }
+        }
+    }
+
+    fun revertSelectedGitLine(hunkIndex: Int, lineIndex: Int) {
+        val projectPath = selectedProjectPath
+        val document = gitDiffDocument ?: run {
+            statusMessage = "No revertable Git patch is loaded."
+            return
+        }
+
+        if (projectPath.isBlank()) return
+        isGitReverting = true
+        statusMessage = "Reverting selected line..."
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                gitDiffService.revertLine(Path.of(projectPath), document, hunkIndex, lineIndex)
+            }
+            isGitReverting = false
+            statusMessage = result.message
+            if (result.success) {
+                selectedGitObservation = null
+                gitDiffPreview = null
+                gitDiffDocument = null
+                refresh(recountProjectLines = false)
+            }
+        }
+    }
+
+    fun revertGitObservation(observation: GitFileObservation) {
+        val projectPath = selectedProjectPath
+        if (projectPath.isBlank()) return
+
+        isGitReverting = true
+        statusMessage = "Reverting selected file..."
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                gitDiffService.revertObservation(Path.of(projectPath), observation)
+            }
+            isGitReverting = false
+            statusMessage = result.message
+            if (result.success) {
+                if (selectedGitObservation?.id == observation.id) {
+                    selectedGitObservation = null
+                    gitDiffPreview = null
+                    gitDiffDocument = null
+                }
+                refresh(recountProjectLines = false)
+            }
+        }
+    }
+
+    fun revertGitObservationGroup(observations: List<GitFileObservation>) {
+        val projectPath = selectedProjectPath
+        if (projectPath.isBlank()) return
+
+        isGitReverting = true
+        statusMessage = "Reverting selected file block..."
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                gitDiffService.revertObservationGroup(Path.of(projectPath), observations)
+            }
+            isGitReverting = false
+            statusMessage = result.message
+            if (result.success) {
+                selectedGitObservation = null
+                gitDiffPreview = null
+                gitDiffDocument = null
+                refresh(recountProjectLines = false)
+            }
         }
     }
 

@@ -1,19 +1,14 @@
 package com.flowmetric.plugin.services
 
 import com.flowmetric.plugin.state.FlowMetricAppState
-import com.flowmetric.shared.analytics.LineDiffEstimator
-import com.flowmetric.shared.analytics.LinePatchBuilder
 import com.flowmetric.shared.config.ProjectFileRules
-import com.flowmetric.shared.heuristics.HeuristicContext
-import com.flowmetric.shared.heuristics.HeuristicScorer
 import com.flowmetric.shared.model.ChangeEvent
-import com.flowmetric.shared.model.ChangeMetadata
 import com.flowmetric.shared.model.EventSource
-import com.flowmetric.shared.model.FileLineDelta
 import com.flowmetric.shared.model.FlowMetricProjectConfig
-import com.flowmetric.shared.model.TrackedProject
 import com.flowmetric.shared.persistence.FlowMetricProjectConfigStore
 import com.flowmetric.shared.persistence.FlowMetricStore
+import com.flowmetric.shared.tracking.ChangeEventFactory
+import com.flowmetric.shared.tracking.ChangeEventRequest
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
 import com.intellij.openapi.editor.Document
@@ -26,15 +21,13 @@ import com.intellij.openapi.vfs.newvfs.events.VFileContentChangeEvent
 import com.intellij.openapi.vfs.newvfs.events.VFileEvent
 import com.intellij.util.concurrency.AppExecutorUtil
 import java.nio.file.Path
-import java.security.MessageDigest
 import java.time.Instant
-import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.io.path.extension
 
 @Service(Service.Level.PROJECT)
 class FlowMetricProjectService(private val project: Project) {
-    private val scorer = HeuristicScorer()
+    private val changeEventFactory = ChangeEventFactory()
     private val snapshotCache = ConcurrentHashMap<String, String>()
     private val eventCache = mutableListOf<ChangeEvent>()
     private val eventLock = Any()
@@ -89,75 +82,30 @@ class FlowMetricProjectService(private val project: Project) {
         }
 
         synchronized(eventLock) {
-            val delta = estimateLineDelta(previousText, currentText)
-            if (delta.changedLines == 0) {
+            val rootPath = trackedRootPath() ?: return
+            val gitContext = resolveGitContext(Path.of(rootPath))
+            val preparedEvent = changeEventFactory.build(
+                ChangeEventRequest(
+                    projectPath = rootPath,
+                    filePath = file.path,
+                    fileExtension = Path.of(file.path).extension,
+                    languageHint = file.fileType.name,
+                    branchName = gitContext?.branchName,
+                    headCommitHash = gitContext?.headCommitHash,
+                    previousText = previousText,
+                    currentText = currentText,
+                    source = source,
+                    existingEvents = eventCache,
+                    timestampEpochMillis = Instant.now().toEpochMilli(),
+                ),
+            ) ?: run {
                 snapshotCache[file.path] = currentText
                 return
             }
 
-            val now = Instant.now().toEpochMilli()
-            val previousEvent = eventCache.lastOrNull { it.filePath == file.path }
-            val previousGlobalEvent = eventCache.lastOrNull()
-            val sessionId = resolveSessionId(now)
-            val sessionEvents = eventCache.filter { it.sessionId == sessionId }
-            val filesTouchedInSession = (sessionEvents.map { it.filePath } + file.path).distinct().size
-            val sessionStart = sessionEvents.minOfOrNull { it.timestampEpochMillis } ?: now
-            val millisSincePreviousEvent = previousGlobalEvent?.let { now - it.timestampEpochMillis }
-            val snapshot = scorer.score(
-                insertedLines = delta.inserted,
-                deletedLines = delta.deleted,
-                timestampEpochMillis = now,
-                largestInsertedBlock = delta.largestInsertedBlock,
-                context = HeuristicContext(
-                    previousEventForFile = previousEvent,
-                    previousEventsInSession = sessionEvents,
-                    millisSincePreviousEvent = millisSincePreviousEvent,
-                    sessionDurationMillis = now - sessionStart,
-                    filesTouchedInSession = filesTouchedInSession,
-                    currentSource = source,
-                ),
-            )
-
-            val rootPath = trackedRootPath() ?: return
-            val projectModel = TrackedProject(
-                id = rootPath,
-                rootPath = rootPath,
-                selectedAtEpochMillis = now,
-            )
-            val event = ChangeEvent(
-                id = UUID.randomUUID().toString(),
-                projectId = projectModel.id,
-                projectPath = rootPath,
-                filePath = file.path,
-                timestampEpochMillis = now,
-                sessionId = sessionId,
-                delta = delta,
-                metadata = ChangeMetadata(
-                    source = source,
-                    fileExtension = Path.of(file.path).extension,
-                    languageHint = file.fileType.name,
-                    latestContentHash = currentText.sha256(),
-                    linePatch = LinePatchBuilder.build(previousText, currentText),
-                    millisSincePreviousEvent = millisSincePreviousEvent,
-                    sessionEventIndex = sessionEvents.size + 1,
-                    sessionDurationMillis = now - sessionStart,
-                    filesTouchedInSession = filesTouchedInSession,
-                ),
-                snapshot = snapshot,
-            )
-
-            FlowMetricStore.projectStore(Path.of(rootPath)).appendEvent(event, projectModel)
-            eventCache += event
+            FlowMetricStore.projectStore(Path.of(rootPath)).appendEvent(preparedEvent.event, preparedEvent.project)
+            eventCache += preparedEvent.event
             snapshotCache[file.path] = currentText
-        }
-    }
-
-    private fun resolveSessionId(now: Long): String {
-        val existing = eventCache.lastOrNull()
-        return if (existing != null && now - existing.timestampEpochMillis <= SESSION_WINDOW_MS) {
-            existing.sessionId
-        } else {
-            UUID.randomUUID().toString()
         }
     }
 
@@ -221,9 +169,6 @@ class FlowMetricProjectService(private val project: Project) {
             FileDocumentManager.getInstance().getCachedDocument(file)?.let { !it.isWritable } != true
     }
 
-    private fun estimateLineDelta(previousText: String, currentText: String): FileLineDelta =
-        LineDiffEstimator.estimate(previousText, currentText)
-
     private fun loadProjectConfig(rootPath: String): FlowMetricProjectConfig {
         if (cachedConfigRoot == rootPath) return cachedProjectConfig
         val config = FlowMetricProjectConfigStore.projectConfigStore(Path.of(rootPath)).readOrCreate()
@@ -232,17 +177,35 @@ class FlowMetricProjectService(private val project: Project) {
         return config
     }
 
-    private fun String.sha256(): String {
-        val digest = MessageDigest.getInstance("SHA-256").digest(toByteArray())
-        return digest.joinToString("") { "%02x".format(it) }
+    private fun resolveGitContext(projectRoot: Path): GitContext? {
+        val process = runCatching {
+            ProcessBuilder("git", "rev-parse", "--abbrev-ref", "HEAD", "HEAD")
+                .directory(projectRoot.toFile())
+                .redirectErrorStream(true)
+                .start()
+        }.getOrNull() ?: return null
+
+        val output = process.inputStream.bufferedReader().use { it.readLines() }
+        if (process.waitFor() != 0 || output.size < 2) return null
+
+        val branchName = output.first().trim().ifBlank { null }
+        val headCommitHash = output.last().trim().ifBlank { null }
+        if (branchName == null && headCommitHash == null) return null
+
+        return GitContext(
+            branchName = branchName,
+            headCommitHash = headCommitHash,
+        )
     }
 
-    companion object {
-        private const val SESSION_WINDOW_MS = 10 * 60 * 1000L
-    }
 }
 
 private data class ExternalChangeCandidate(
     val file: VirtualFile,
     val previousText: String,
+)
+
+private data class GitContext(
+    val branchName: String?,
+    val headCommitHash: String?,
 )

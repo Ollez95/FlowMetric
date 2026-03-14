@@ -2,6 +2,8 @@ package com.flowmetric.desktop.git
 
 import com.flowmetric.shared.config.ProjectFileRules
 import com.flowmetric.shared.model.FlowMetricProjectConfig
+import com.flowmetric.shared.model.GitCommitFileChange
+import com.flowmetric.shared.model.GitCommitSummary
 import com.flowmetric.shared.model.GitFileDelta
 import com.flowmetric.shared.model.GitFileObservation
 import com.flowmetric.shared.model.GitFileStatus
@@ -11,6 +13,7 @@ import com.flowmetric.shared.persistence.FlowMetricStore
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.attribute.FileTime
+import java.time.Instant
 import java.util.UUID
 import kotlin.io.path.exists
 import kotlin.io.path.isRegularFile
@@ -33,6 +36,7 @@ class GitDiffService {
         }
 
         val repoPath = Path.of(repoRoot)
+        val currentBranch = runGit(repoPath, "rev-parse", "--abbrev-ref", "HEAD").trim().ifBlank { null }
         val config = FlowMetricProjectConfigStore.projectConfigStore(projectRoot).readOrCreate()
         val tracked = parseTrackedDiff(repoPath)
         val untracked = parseUntrackedFiles(repoPath)
@@ -55,10 +59,12 @@ class GitDiffService {
                     .thenBy { it.filePath },
             )
         val observations = buildObservations(projectRoot, repoPath, files)
+        val commits = parseRecentCommits(repoPath)
 
         return GitWorkingTreeSummary(
             available = true,
             repositoryRoot = repoRoot,
+            currentBranch = currentBranch,
             totalInsertedLines = files.sumOf { it.insertedLines },
             totalDeletedLines = files.sumOf { it.deletedLines },
             estimatedAiLines = files.sumOf { it.estimatedAiLines },
@@ -66,6 +72,7 @@ class GitDiffService {
             changedFilesCount = files.size,
             files = files,
             observations = observations,
+            commits = commits,
             heuristicAssessment = null,
             message = if (files.isEmpty()) "Working tree is clean." else null,
         )
@@ -126,6 +133,21 @@ class GitDiffService {
         }
     }
 
+    fun diffForCommit(projectRoot: Path, commitHash: String): String {
+        val repoRoot = runGit(projectRoot, "rev-parse", "--show-toplevel").trim()
+        if (repoRoot.isBlank()) return "Git repository not available."
+
+        return runGit(
+            Path.of(repoRoot),
+            "show",
+            "--stat",
+            "--patch",
+            "--format=fuller",
+            "--date=iso",
+            commitHash,
+        ).ifBlank { "No commit diff available." }
+    }
+
     private fun runGit(workingDirectory: Path, vararg args: String): String {
         val process = ProcessBuilder(listOf("git", *args))
             .directory(workingDirectory.toFile())
@@ -152,6 +174,85 @@ class GitDiffService {
             appendLine("@@ -0,0 +1,${content.lineSequence().count()} @@")
             append(body)
         }.trimEnd()
+    }
+
+    private fun parseRecentCommits(repoRoot: Path): List<GitCommitSummary> {
+        val output = runGit(
+            repoRoot,
+            "log",
+            "-n",
+            RECENT_COMMITS_LIMIT.toString(),
+            "--date=iso-strict",
+            "--pretty=format:__COMMIT__%n%H%x1f%h%x1f%ad%x1f%an%x1f%s",
+            "--numstat",
+        )
+        if (output.isBlank()) return emptyList()
+
+        val commits = mutableListOf<GitCommitSummary>()
+        var currentMeta: List<String>? = null
+        var insertedLines = 0
+        var deletedLines = 0
+        var changedFiles = 0
+        val commitFiles = mutableListOf<GitCommitFileChange>()
+
+        fun flushCurrent() {
+            val meta = currentMeta ?: return
+            val committedAt = runCatching { Instant.parse(meta[2]).toEpochMilli() }.getOrDefault(0L)
+            commits += GitCommitSummary(
+                hash = meta[0],
+                shortHash = meta[1],
+                committedAtEpochMillis = committedAt,
+                authorName = meta[3],
+                subject = meta[4],
+                changedFilesCount = changedFiles,
+                insertedLines = insertedLines,
+                deletedLines = deletedLines,
+                files = commitFiles.toList(),
+            )
+        }
+
+        output.lineSequence().forEach { line ->
+            when {
+                line == "__COMMIT__" -> {
+                    flushCurrent()
+                    currentMeta = null
+                    insertedLines = 0
+                    deletedLines = 0
+                    changedFiles = 0
+                    commitFiles.clear()
+                }
+
+                currentMeta == null && line.isNotBlank() -> {
+                    val meta = line.split('\u001f')
+                    if (meta.size == 5) {
+                        currentMeta = meta
+                    }
+                }
+
+                line.isBlank() -> Unit
+
+                else -> {
+                    val parts = line.split('\t')
+                    if (parts.size >= 3) {
+                        val fileInsertedLines = parts[0].toIntOrNull() ?: 0
+                        val fileDeletedLines = parts[1].toIntOrNull() ?: 0
+                        val filePath = parts.drop(2).last()
+                        insertedLines += fileInsertedLines
+                        deletedLines += fileDeletedLines
+                        changedFiles += 1
+                        commitFiles += GitCommitFileChange(
+                            filePath = filePath,
+                            status = inferCommittedFileStatus(fileInsertedLines, fileDeletedLines),
+                            insertedLines = fileInsertedLines,
+                            deletedLines = fileDeletedLines,
+                        )
+                    }
+                }
+            }
+        }
+
+        flushCurrent()
+        return commits
     }
 
     private fun countLines(path: Path): Int {
@@ -190,6 +291,12 @@ class GitDiffService {
         GitFileStatus.RENAMED -> 2
         GitFileStatus.TYPE_CHANGED -> 1
         GitFileStatus.MODIFIED, GitFileStatus.UNKNOWN -> 0
+    }
+
+    private fun inferCommittedFileStatus(insertedLines: Int, deletedLines: Int): GitFileStatus = when {
+        insertedLines > 0 && deletedLines == 0 -> GitFileStatus.ADDED
+        deletedLines > 0 && insertedLines == 0 -> GitFileStatus.DELETED
+        else -> GitFileStatus.MODIFIED
     }
 
     private fun readLastModified(path: Path): Long? =
@@ -271,5 +378,6 @@ class GitDiffService {
 
     companion object {
         private const val OBSERVATION_BUCKET_MS = 2 * 60 * 1000L
+        private const val RECENT_COMMITS_LIMIT = 15
     }
 }

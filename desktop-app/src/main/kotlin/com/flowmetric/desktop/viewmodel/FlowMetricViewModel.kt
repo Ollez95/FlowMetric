@@ -15,6 +15,7 @@ import com.flowmetric.shared.model.ConfidenceLevel
 import com.flowmetric.shared.model.DashboardMetrics
 import com.flowmetric.shared.model.FlowMetricSnapshot
 import com.flowmetric.shared.model.FlowMetricProjectConfig
+import com.flowmetric.shared.model.GitCommitSummary
 import com.flowmetric.shared.model.GitFileObservation
 import com.flowmetric.shared.model.GitWorkingTreeSummary
 import com.flowmetric.shared.persistence.FlowMetricProjectConfigStore
@@ -76,6 +77,9 @@ class FlowMetricViewModel(
     var selectedGitObservation by mutableStateOf<GitFileObservation?>(null)
         private set
 
+    var selectedGitCommit by mutableStateOf<GitCommitSummary?>(null)
+        private set
+
     var gitDiffPreview by mutableStateOf<String?>(null)
         private set
 
@@ -100,6 +104,7 @@ class FlowMetricViewModel(
 
     fun setProjectPath(path: String) {
         val normalizedPath = path.trim()
+        val isProjectSwitch = normalizedPath != selectedProjectPath
         selectedProjectPath = normalizedPath
         projectPathInput = normalizedPath
         recentProjectsStore.add(normalizedPath)
@@ -108,6 +113,17 @@ class FlowMetricViewModel(
         cachedProjectLines = null
         cachedProjectFiles = null
         projectConfig = FlowMetricProjectConfigStore.projectConfigStore(Path.of(normalizedPath)).readOrCreate()
+        if (isProjectSwitch) {
+            refreshJob?.cancel()
+            dashboard = null
+            snapshot = FlowMetricSnapshot()
+            gitSummary = null
+            selectedGitObservation = null
+            selectedGitCommit = null
+            gitDiffPreview = null
+            isLoading = true
+            statusMessage = "Loading project analytics..."
+        }
         scope.launch(Dispatchers.IO) {
             externalEventRecorder.prime(Path.of(normalizedPath))
         }
@@ -132,6 +148,7 @@ class FlowMetricViewModel(
             snapshot = FlowMetricSnapshot()
             gitSummary = null
             selectedGitObservation = null
+            selectedGitCommit = null
             gitDiffPreview = null
             projectConfig = FlowMetricProjectConfig()
             isLoading = false
@@ -148,6 +165,7 @@ class FlowMetricViewModel(
             snapshot = FlowMetricSnapshot()
             gitSummary = null
             selectedGitObservation = null
+            selectedGitCommit = null
             gitDiffPreview = null
             projectConfig = FlowMetricProjectConfig()
             statusMessage = null
@@ -184,6 +202,7 @@ class FlowMetricViewModel(
             snapshot = FlowMetricSnapshot()
             gitSummary = null
             selectedGitObservation = null
+            selectedGitCommit = null
             gitDiffPreview = null
             projectConfig = FlowMetricProjectConfig()
             statusMessage = null
@@ -253,6 +272,7 @@ class FlowMetricViewModel(
     }
 
     fun selectGitObservation(observation: GitFileObservation) {
+        selectedGitCommit = null
         selectedGitObservation = observation
         if (!observation.linePatch.isNullOrBlank()) {
             gitDiffPreview = observation.linePatch
@@ -275,6 +295,29 @@ class FlowMetricViewModel(
             if (selectedGitObservation?.id == observation.id) {
                 gitDiffPreview = diff
             }
+        }
+    }
+
+    fun selectGitCommit(commit: GitCommitSummary) {
+        selectedGitObservation = null
+        selectedGitCommit = commit
+        gitDiffPreview = "Loading commit diff..."
+
+        val projectPath = selectedProjectPath
+        scope.launch {
+            val diff = withContext(Dispatchers.IO) {
+                gitDiffService.diffForCommit(Path.of(projectPath), commit.hash)
+            }
+            if (selectedGitCommit?.hash == commit.hash) {
+                gitDiffPreview = diff
+            }
+        }
+    }
+
+    fun selectUncommittedChanges() {
+        selectedGitCommit = null
+        if (selectedGitObservation == null) {
+            gitDiffPreview = null
         }
     }
 

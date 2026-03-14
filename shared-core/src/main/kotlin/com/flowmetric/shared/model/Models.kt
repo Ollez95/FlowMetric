@@ -37,6 +37,8 @@ data class ChangeMetadata(
     val source: EventSource,
     val fileExtension: String,
     val languageHint: String? = null,
+    val branchName: String? = null,
+    val headCommitHash: String? = null,
     val latestContentHash: String? = null,
     val linePatch: String? = null,
     val millisSincePreviousEvent: Long? = null,
@@ -162,6 +164,27 @@ data class GitFileObservation(
 )
 
 @Serializable
+data class GitCommitSummary(
+    val hash: String,
+    val shortHash: String,
+    val authorName: String,
+    val subject: String,
+    val committedAtEpochMillis: Long,
+    val changedFilesCount: Int,
+    val insertedLines: Int,
+    val deletedLines: Int,
+    val files: List<GitCommitFileChange> = emptyList(),
+)
+
+@Serializable
+data class GitCommitFileChange(
+    val filePath: String,
+    val status: GitFileStatus,
+    val insertedLines: Int,
+    val deletedLines: Int,
+)
+
+@Serializable
 enum class GitFileStatus {
     MODIFIED,
     ADDED,
@@ -176,6 +199,7 @@ enum class GitFileStatus {
 data class GitWorkingTreeSummary(
     val available: Boolean,
     val repositoryRoot: String? = null,
+    val currentBranch: String? = null,
     val totalInsertedLines: Int = 0,
     val totalDeletedLines: Int = 0,
     val estimatedAiLines: Int = 0,
@@ -183,6 +207,7 @@ data class GitWorkingTreeSummary(
     val changedFilesCount: Int = 0,
     val files: List<GitFileDelta> = emptyList(),
     val observations: List<GitFileObservation> = emptyList(),
+    val commits: List<GitCommitSummary> = emptyList(),
     val heuristicAssessment: GitHeuristicAssessment? = null,
     val message: String? = null,
 )

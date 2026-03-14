@@ -23,8 +23,13 @@ class RecentProjectsStore(
         val normalized = path.trim()
         if (normalized.isBlank()) return
 
-        val updated = listOf(normalized) + read().filterNot { it == normalized }
-        write(updated.take(MAX_RECENT_PROJECTS))
+        val current = read()
+        if (normalized in current) {
+            return
+        }
+
+        val updated = (current + normalized).takeLast(MAX_RECENT_PROJECTS)
+        write(updated)
     }
 
     fun remove(path: String) {

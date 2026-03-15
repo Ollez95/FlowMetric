@@ -15,6 +15,8 @@ data class ChangeEventRequest(
     val projectPath: String,
     val filePath: String,
     val fileExtension: String,
+    val sourceLabel: String? = null,
+    val agentModel: String? = null,
     val languageHint: String? = null,
     val branchName: String? = null,
     val headCommitHash: String? = null,
@@ -38,6 +40,7 @@ class ChangeEventFactory(
 
         val delta = LineDiffEstimator.estimate(request.previousText, request.currentText)
         if (delta.changedLines == 0) return null
+        val linePatch = LinePatchBuilder.build(request.previousText, request.currentText)
 
         val previousEvent = request.existingEvents
             .asSequence()
@@ -80,12 +83,14 @@ class ChangeEventFactory(
             delta = delta,
             metadata = ChangeMetadata(
                 source = request.source,
+                sourceLabel = request.sourceLabel,
+                agentModel = request.agentModel,
                 fileExtension = request.fileExtension.removePrefix("."),
                 languageHint = request.languageHint,
                 branchName = request.branchName,
                 headCommitHash = request.headCommitHash,
                 latestContentHash = request.currentText.sha256(),
-                linePatch = LinePatchBuilder.build(request.previousText, request.currentText),
+                linePatch = linePatch,
                 millisSincePreviousEvent = millisSincePreviousEvent,
                 sessionEventIndex = sessionEvents.size + 1,
                 sessionDurationMillis = request.timestampEpochMillis - sessionStart,

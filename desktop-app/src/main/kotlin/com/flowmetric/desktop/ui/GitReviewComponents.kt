@@ -22,6 +22,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalIconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.PrimaryTabRow
 import androidx.compose.material3.Tab
@@ -68,10 +69,10 @@ internal fun GitSection(
                 !summary.available -> Text(summary.message ?: "Git is not available for this folder.")
                 else -> {
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        SummaryCard("Branch", summary.currentBranch ?: "Detached", Color(0xFF7A3E65))
-                        SummaryCard("Git files", summary.changedFilesCount.toString(), Color(0xFF172A3A))
-                        SummaryCard("Git +lines", summary.totalInsertedLines.toString(), Color(0xFF2A7F62))
-                        SummaryCard("Git -lines", summary.totalDeletedLines.toString(), Color(0xFFD96C2F))
+                        SummaryCard("Branch", summary.currentBranch ?: "Detached", FlowMetricPlum)
+                        SummaryCard("Git files", summary.changedFilesCount.toString(), FlowMetricInk)
+                        SummaryCard("Git +lines", summary.totalInsertedLines.toString(), FlowMetricTeal)
+                        SummaryCard("Git -lines", summary.totalDeletedLines.toString(), FlowMetricOrange)
                     }
                     GitScopeSelector(
                         currentBranch = summary.currentBranch,
@@ -111,13 +112,13 @@ private fun GitScopeSelector(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(Color(0xFFF7F4EE))
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
                 .padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text("Review source", fontWeight = FontWeight.SemiBold)
             currentBranch?.let {
-                Text("Branch: $it", color = Color(0xFF6B7B83), fontSize = 12.sp)
+                Text("Branch: $it", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
             }
             ScopeCard(
                 title = "Uncommitted changes",
@@ -127,7 +128,7 @@ private fun GitScopeSelector(
                 onClick = onSelectUncommitted,
             )
             if (commits.isNotEmpty()) {
-                Text("Recent commits", fontWeight = FontWeight.Medium, fontSize = 13.sp, color = Color(0xFF49616D))
+                Text("Recent commits", fontWeight = FontWeight.Medium, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 commits.forEach { commit ->
                     ScopeCard(
                         title = commit.subject,
@@ -150,11 +151,14 @@ private fun ScopeCard(
     selected: Boolean,
     onClick: () -> Unit,
 ) {
-    val accent = if (selected) Color(0xFFD96C2F) else Color(0xFFE2D8C8)
+    val accent = if (selected) FlowMetricOrange else MaterialTheme.colorScheme.outline
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(if (selected) Color(0xFFFFF2E8) else Color.White, RoundedCornerShape(14.dp))
+            .background(
+                if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surface,
+                RoundedCornerShape(14.dp),
+            )
             .border(1.dp, accent, RoundedCornerShape(14.dp))
             .clickable(onClick = onClick)
             .padding(12.dp),
@@ -162,9 +166,9 @@ private fun ScopeCard(
     ) {
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(title, fontWeight = FontWeight.Medium)
-            Text(subtitle, color = Color(0xFF49616D), fontSize = 12.sp)
+            Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
         }
-        Text(meta, color = Color(0xFF6B7B83), fontSize = 12.sp)
+        Text(meta, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
     }
 }
 
@@ -182,13 +186,7 @@ private fun UncommittedFilesSection(
         return
     }
 
-    val timelineColors = listOf(
-        Color(0xFFD96C2F),
-        Color(0xFF2A7F62),
-        Color(0xFF49616D),
-        Color(0xFF7A3E65),
-        Color(0xFFB7791F),
-    )
+    val timelineColors = listOf(FlowMetricOrange, FlowMetricTeal, FlowMetricSlate, FlowMetricPlum, FlowMetricGold)
     val groupedObservations = observationGroups(summary.observations)
     val pageCount = groupedObservations.pageCount(UNCOMMITTED_GROUPS_PER_PAGE)
     var pageIndex by remember(summary.observations) { mutableStateOf(0) }
@@ -212,7 +210,7 @@ private fun UncommittedFilesSection(
         UncommittedTab.FILES -> {
             Text(
                 "${summary.files.size} current file${if (summary.files.size == 1) "" else "s"} changed",
-                color = Color(0xFF49616D),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 12.sp,
             )
             CurrentChangedFilesSection(
@@ -231,7 +229,7 @@ private fun UncommittedFilesSection(
             ) {
                 Text(
                     "Page ${safePageIndex + 1} of ${pageCount.coerceAtLeast(1)}",
-                    color = Color(0xFF49616D),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 12.sp,
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -284,32 +282,32 @@ private fun UncommittedFilesSection(
                             )
                         }
                         Card(shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()) {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .background(Color.White)
-                                    .padding(12.dp),
-                                verticalArrangement = Arrangement.spacedBy(6.dp),
-                            ) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .background(MaterialTheme.colorScheme.surface)
+                                        .padding(12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                                ) {
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                 ) {
                                     Text(
                                         "History: ${formatTimestamp(oldestTimestamp)} to ${formatTimestamp(newestTimestamp)}",
-                                        color = Color(0xFF49616D),
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         fontSize = 12.sp,
                                     )
                                     Text(
                                         "${uniqueFiles.size} file${if (uniqueFiles.size == 1) "" else "s"} changed",
-                                        color = Color(0xFF49616D),
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         fontSize = 12.sp,
                                         fontWeight = FontWeight.Medium,
                                     )
                                 }
                                 Text(
                                     "Files: ${uniqueFiles.joinToString(", ")}",
-                                    color = Color(0xFF6B7B83),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     fontSize = 12.sp,
                                 )
                             }
@@ -318,7 +316,7 @@ private fun UncommittedFilesSection(
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .background(Color(0xFFF7F4EE), RoundedCornerShape(14.dp))
+                                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f), RoundedCornerShape(14.dp))
                                     .clickable { onSelectObservation(observation) }
                                     .padding(12.dp),
                                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -332,7 +330,7 @@ private fun UncommittedFilesSection(
                                     )
                                     Text(
                                         "Changed: ${formatTimestamp(observation.observedAtEpochMillis)}",
-                                        color = Color(0xFF6B7B83),
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         fontSize = 12.sp,
                                     )
                                 }
@@ -372,7 +370,7 @@ private fun CurrentChangedFilesSection(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(Color(0xFFF7F4EE), RoundedCornerShape(14.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f), RoundedCornerShape(14.dp))
                     .clickable(enabled = observation != null) { observation?.let(onSelectObservation) }
                     .padding(12.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -387,7 +385,7 @@ private fun CurrentChangedFilesSection(
                     observation?.let {
                         Text(
                             "Latest change: ${formatTimestamp(it.observedAtEpochMillis)}",
-                            color = Color(0xFF6B7B83),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             fontSize = 12.sp,
                         )
                     }
@@ -426,7 +424,7 @@ private fun CommitFilesSection(files: List<GitCommitFileChange>) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(Color(0xFFF7F4EE))
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
                 .padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
@@ -434,7 +432,7 @@ private fun CommitFilesSection(files: List<GitCommitFileChange>) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(Color.White, RoundedCornerShape(14.dp))
+                        .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(14.dp))
                         .padding(12.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
@@ -469,12 +467,12 @@ internal fun GitDetailPanel(
             Text("Git Review", fontSize = 24.sp, fontWeight = FontWeight.Bold)
             Text(
                 "This tab is a plain Git working-tree view. It shows changed files, commit history, and diffs without any AI classification.",
-                color = Color(0xFF49616D),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             when {
                 selectedCommit != null -> {
                     Text(selectedCommit.subject, fontWeight = FontWeight.SemiBold, fontSize = 20.sp)
-                    Text("Commit ${selectedCommit.shortHash}", color = Color(0xFF49616D))
+                    Text("Commit ${selectedCommit.shortHash}", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text("Author: ${selectedCommit.authorName}")
                     Text("Committed at: ${formatTimestamp(selectedCommit.committedAtEpochMillis)}")
                     Text("Changed files: ${selectedCommit.changedFilesCount}")
@@ -499,7 +497,7 @@ internal fun GitDetailPanel(
 
                 selectedObservation != null -> {
                     Text(java.io.File(selectedObservation.filePath).name, fontWeight = FontWeight.SemiBold, fontSize = 20.sp)
-                    Text(selectedObservation.filePath, color = Color(0xFF49616D))
+                    Text(selectedObservation.filePath, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text("Git status: ${gitStatusLabel(selectedObservation.status)}")
                     Text("Inserted lines: ${selectedObservation.insertedLines}")
                     Text("Deleted lines: ${selectedObservation.deletedLines}")
@@ -547,7 +545,7 @@ internal fun GitDiffPreview(diffPreview: String?, modifier: Modifier = Modifier)
     val diffText = diffPreview ?: "Select a Git timeline entry or commit to load its diff."
     Column(
         modifier = modifier
-            .background(Color(0xFFFBF8F2), RoundedCornerShape(14.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.28f), RoundedCornerShape(14.dp))
             .verticalScroll(rememberScrollState())
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp),
@@ -573,7 +571,7 @@ private fun GitDiffActions(
 ) {
     Column(
         modifier = modifier
-            .background(Color(0xFFFBF8F2), RoundedCornerShape(14.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.28f), RoundedCornerShape(14.dp))
             .verticalScroll(rememberScrollState())
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -586,7 +584,7 @@ private fun GitDiffActions(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(Color.White)
+                        .background(MaterialTheme.colorScheme.surface)
                         .padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
@@ -595,7 +593,7 @@ private fun GitDiffActions(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Text(hunk.header, color = Color(0xFFB7791F), fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                        Text(hunk.header, color = FlowMetricGold, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
                         FilledTonalIconButton(
                             onClick = { onRevertHunk(hunkIndex) },
                             enabled = !isReverting,
@@ -676,18 +674,18 @@ internal fun gitStatusLabel(status: GitFileStatus): String = when (status) {
 }
 
 internal fun gitStatusColor(status: GitFileStatus): Color = when (status) {
-    GitFileStatus.ADDED, GitFileStatus.UNTRACKED -> Color(0xFF2A7F62)
-    GitFileStatus.DELETED -> Color(0xFFD96C2F)
-    GitFileStatus.RENAMED, GitFileStatus.TYPE_CHANGED -> Color(0xFF7A3E65)
-    GitFileStatus.MODIFIED, GitFileStatus.UNKNOWN -> Color(0xFF49616D)
+    GitFileStatus.ADDED, GitFileStatus.UNTRACKED -> FlowMetricTeal
+    GitFileStatus.DELETED -> FlowMetricOrange
+    GitFileStatus.RENAMED, GitFileStatus.TYPE_CHANGED -> FlowMetricPlum
+    GitFileStatus.MODIFIED, GitFileStatus.UNKNOWN -> FlowMetricSlate
 }
 
 internal fun gitDiffLineColor(line: String): Color = when {
-    line.startsWith("+++") || line.startsWith("---") || line.startsWith("diff --git") -> Color(0xFF7A3E65)
-    line.startsWith("@@") -> Color(0xFFB7791F)
-    line.startsWith("+") -> Color(0xFF2A7F62)
-    line.startsWith("-") -> Color(0xFFD96C2F)
-    else -> Color(0xFF49616D)
+    line.startsWith("+++") || line.startsWith("---") || line.startsWith("diff --git") -> FlowMetricPlum
+    line.startsWith("@@") -> FlowMetricGold
+    line.startsWith("+") -> FlowMetricTeal
+    line.startsWith("-") -> FlowMetricOrange
+    else -> FlowMetricSlate
 }
 
 internal fun observationGroups(observations: List<GitFileObservation>): List<List<GitFileObservation>> {

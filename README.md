@@ -2,6 +2,8 @@
 
 FlowMetric is a local-only developer analytics MVP for a single selected project. It estimates whether saved code changes were likely AI-assisted or likely non-AI using edit-pattern heuristics. It does not attempt exact attribution.
 
+FlowMetric can also record explicit `CODEX_PATCH` events when Codex is instructed to report its own edits. Those events are more precise than heuristics because they carry the exact before/after patch for the edited file.
+
 ## Critical review
 
 ### Main risks
@@ -115,6 +117,57 @@ FlowMetric/
 - Desktop app: `./gradlew :desktop-app:run`
 - Shared tests: `./gradlew :shared-core:test`
 - Plugin sandbox: `./gradlew :android-studio-plugin:runIde`
+
+### Exact Codex patch recording
+If you want FlowMetric to know that Codex changed exact lines, use the local recorder after a Codex edit:
+
+```bash
+scripts/record_codex_edit.sh <project-root> <absolute-file-path> <before-snapshot-file>
+```
+
+You can still pass the model label manually before running the recorder if you want it stored on the event:
+
+```bash
+export FLOWMETRIC_AGENT_MODEL="gpt-5-codex"
+```
+
+If you want one command for multiple edited files, create a tab-separated manifest where each line is:
+
+```text
+<absolute-file-path>\t<before-snapshot-file>
+```
+
+Then run:
+
+```bash
+scripts/record_codex_batch.sh <project-root> <manifest-file>
+```
+
+For a faster setup in another local project, use the desktop app's `Install tracking` button after selecting that project. FlowMetric will install a small proxy script plus an `AGENTS.md` snippet into the target repo.
+
+Example:
+
+```bash
+tmp_before="$(mktemp)"
+cp /Users/gustavolorena/IdeaProjects/FlowMetric/shared-core/src/main/kotlin/com/flowmetric/shared/model/Models.kt "$tmp_before"
+# let Codex edit the file
+scripts/record_codex_edit.sh \
+  /Users/gustavolorena/IdeaProjects/FlowMetric \
+  /Users/gustavolorena/IdeaProjects/FlowMetric/shared-core/src/main/kotlin/com/flowmetric/shared/model/Models.kt \
+  "$tmp_before"
+```
+
+Batch example:
+
+```bash
+manifest="$(mktemp)"
+printf '%s\t%s\n' \
+  /Users/gustavolorena/IdeaProjects/FlowMetric/shared-core/src/main/kotlin/com/flowmetric/shared/model/Models.kt \
+  "$tmp_before" > "$manifest"
+scripts/record_codex_batch.sh /Users/gustavolorena/IdeaProjects/FlowMetric "$manifest"
+```
+
+That appends a `CODEX_PATCH` event to `.flowmetric/events.json` using the exact diff between the saved snapshot and the current file on disk.
 
 ## Current MVP status
 

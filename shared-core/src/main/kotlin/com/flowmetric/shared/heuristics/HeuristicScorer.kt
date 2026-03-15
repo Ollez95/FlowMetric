@@ -39,6 +39,18 @@ class HeuristicScorer {
             )
         }
 
+        if (context.currentSource == EventSource.CODEX_PATCH) {
+            return HeuristicSnapshot(
+                classification = ChangeClassification.ESTIMATED_AI_GENERATED,
+                confidence = ConfidenceLevel.HIGH,
+                confidenceScore = 1.0,
+                estimatedAiLines = changedLines,
+                estimatedNonAiLines = 0,
+                matchedSignals = listOf(HeuristicSignal.CONTIGUOUS_BLOCK_INSERTION),
+                notes = "Recorded as an explicit Codex patch event rather than inferred from heuristics.",
+            )
+        }
+
         var aiScore = 0.0
         var nonAiScore = 0.0
         val signals = mutableListOf<HeuristicSignal>()

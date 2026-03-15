@@ -34,6 +34,19 @@ class FlowMetricStore(
         write(FlowMetricSnapshot(projects = projects, events = events))
     }
 
+    fun appendEvents(events: List<ChangeEvent>, projects: List<TrackedProject>) {
+        if (events.isEmpty()) return
+
+        val current = read()
+        val mergedProjects = (current.projects + projects).distinctBy { it.id }
+        write(
+            FlowMetricSnapshot(
+                projects = mergedProjects,
+                events = current.events + events,
+            ),
+        )
+    }
+
     companion object {
         fun projectStore(projectRoot: Path): FlowMetricStore {
             val flowMetricDir = projectRoot.resolve(".flowmetric")

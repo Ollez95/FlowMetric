@@ -140,8 +140,18 @@ class ProjectWatchService : Closeable {
 
     companion object {
         private const val DEBOUNCE_MS = 700L
-        private val skippedDirectoryNames = setOf(".git", ".gradle", ".idea", "build", "out", "node_modules")
-        private val ignoredPathFragments = listOf("/.git/", "/.gradle/", "/.idea/", "/build/", "/out/", "/node_modules/")
+        private val skippedDirectoryNames = setOf(".git", ".gradle", ".idea", ".intellijPlatform", ".kotlin", ".run", "build", "out", "node_modules")
+        private val ignoredPathFragments = listOf(
+            "/.git/",
+            "/.gradle/",
+            "/.idea/",
+            "/.intellijPlatform/",
+            "/.kotlin/",
+            "/.run/",
+            "/build/",
+            "/out/",
+            "/node_modules/",
+        )
     }
 }
 

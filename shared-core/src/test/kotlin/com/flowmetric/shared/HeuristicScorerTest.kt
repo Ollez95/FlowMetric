@@ -73,4 +73,19 @@ class HeuristicScorerTest {
         assertEquals(ChangeClassification.ESTIMATED_NON_AI, snapshot.classification)
         assertTrue(snapshot.estimatedNonAiLines > snapshot.estimatedAiLines)
     }
+
+    @Test
+    fun `explicit codex patch is treated as direct codex attribution`() {
+        val snapshot = scorer.score(
+            insertedLines = 7,
+            deletedLines = 2,
+            timestampEpochMillis = 1_000L,
+            context = HeuristicContext(currentSource = EventSource.CODEX_PATCH),
+        )
+
+        assertEquals(ChangeClassification.ESTIMATED_AI_GENERATED, snapshot.classification)
+        assertEquals(9, snapshot.estimatedAiLines)
+        assertEquals(0, snapshot.estimatedNonAiLines)
+        assertEquals(com.flowmetric.shared.model.ConfidenceLevel.HIGH, snapshot.confidence)
+    }
 }

@@ -34,8 +34,10 @@ data class ChangeEvent(
 
 @Serializable
 data class ChangeMetadata(
-    val source: EventSource,
-    val fileExtension: String,
+    val source: EventSource = EventSource.DOCUMENT_SAVE,
+    val sourceLabel: String? = null,
+    val agentModel: String? = null,
+    val fileExtension: String = "",
     val languageHint: String? = null,
     val branchName: String? = null,
     val headCommitHash: String? = null,
@@ -51,6 +53,7 @@ data class ChangeMetadata(
 enum class EventSource {
     DOCUMENT_SAVE,
     EXTERNAL_FILE_CHANGE,
+    CODEX_PATCH,
     MANUAL_IMPORT,
 }
 

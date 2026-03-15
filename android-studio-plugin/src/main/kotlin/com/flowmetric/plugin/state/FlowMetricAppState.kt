@@ -9,6 +9,7 @@ import com.intellij.openapi.components.Storage
 @State(name = "FlowMetricAppState", storages = [Storage("flowmetric.xml")])
 class FlowMetricAppState : SerializablePersistentStateComponent<FlowMetricAppState.State>(State()) {
     data class State(
+        // Persist the chosen FlowMetric root per IDE project so save events can resolve consistently.
         val selectedProjectRoots: Map<String, String> = emptyMap(),
     )
 

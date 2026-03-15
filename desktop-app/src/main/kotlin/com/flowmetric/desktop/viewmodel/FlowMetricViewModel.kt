@@ -4,10 +4,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.flowmetric.desktop.install.TrackingInstaller
+import com.flowmetric.desktop.install.TrackingProjectStatus
 import com.flowmetric.desktop.git.GitDiffService
 import com.flowmetric.desktop.git.GitDiffDocument
 import com.flowmetric.desktop.logging.DesktopErrorLogEntry
 import com.flowmetric.desktop.logging.FlowMetricDesktopLogger
+import com.flowmetric.desktop.persistence.AgentModelTypePreference
 import com.flowmetric.desktop.persistence.DesktopAppSettings
 import com.flowmetric.desktop.persistence.DesktopAppSettingsStore
 import com.flowmetric.desktop.persistence.RecentProjectsStore
@@ -41,6 +43,13 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.swing.Swing
 import kotlinx.coroutines.withContext
 
+/**
+ * Coordinates desktop UI state for project selection, analytics refresh, event tracking setup,
+ * Git inspection, and local settings persistence.
+ *
+ * The view model keeps Compose-facing state in memory and delegates heavy work to services on
+ * background dispatchers.
+ */
 class FlowMetricViewModel(
     private val analyticsEngine: AnalyticsEngine = AnalyticsEngine(),
     private val gitDiffService: GitDiffService = GitDiffService(),
@@ -113,6 +122,9 @@ class FlowMetricViewModel(
     var recentProjects by mutableStateOf(emptyList<String>())
         private set
 
+    var trackingStatus by mutableStateOf<TrackingProjectStatus?>(null)
+        private set
+
     init {
         recentProjects = recentProjectsStore.read()
         refreshErrorLogs()
@@ -125,10 +137,15 @@ class FlowMetricViewModel(
         }
     }
 
+    /** Updates the raw project-path input field without applying the change yet. */
     fun updateProjectPathInput(path: String) {
         projectPathInput = path
     }
 
+    /**
+     * Switches the active project, primes external event recording, refreshes project-specific
+     * state, and starts file watching for the selected root.
+     */
     fun setProjectPath(path: String) {
         val normalizedPath = path.trim()
         val isProjectSwitch = normalizedPath != selectedProjectPath
@@ -155,10 +172,12 @@ class FlowMetricViewModel(
         scope.launch(Dispatchers.IO) {
             externalEventRecorder.prime(Path.of(normalizedPath))
         }
+        updateTrackingStatus(normalizedPath)
         startWatchingProject(normalizedPath)
         refresh(recountProjectLines = true)
     }
 
+    /** Removes a project from the recent-project list and clears selection if it was active. */
     fun removeRecentProject(path: String) {
         val normalizedPath = path.trim()
         if (normalizedPath.isBlank()) return
@@ -180,12 +199,14 @@ class FlowMetricViewModel(
             gitDiffPreview = null
             gitDiffDocument = null
             projectConfig = FlowMetricProjectConfig()
+            trackingStatus = null
             isLoading = false
             statusMessage = "Recent project removed."
             projectWatchService.stop()
         }
     }
 
+    /** Persists a new drag-and-drop order for the recent-project list. */
     fun reorderRecentProjects(paths: List<String>) {
         val normalizedPaths = paths
             .map { it.trim() }
@@ -195,6 +216,7 @@ class FlowMetricViewModel(
         recentProjects = recentProjectsStore.read()
     }
 
+    /** Applies the current input as the selected project or triggers a refresh if unchanged. */
     fun applySelectedProjectPathOrRefresh() {
         val normalizedPath = projectPathInput.trim()
         if (normalizedPath.isBlank()) {
@@ -207,6 +229,7 @@ class FlowMetricViewModel(
             gitDiffPreview = null
             gitDiffDocument = null
             projectConfig = FlowMetricProjectConfig()
+            trackingStatus = null
             statusMessage = null
             projectWatchService.stop()
             return
@@ -219,11 +242,13 @@ class FlowMetricViewModel(
         }
     }
 
+    /** Updates the dashboard lookback window and refreshes derived analytics. */
     fun updateLookbackDays(days: Int) {
         lookbackDays = days
         refresh(recountProjectLines = false)
     }
 
+    /** Saves desktop-wide app settings and refreshes the current project if one is loaded. */
     fun saveAppSettings(settings: DesktopAppSettings) {
         val normalizedSettings = settings.normalized()
         appSettingsStore.write(normalizedSettings)
@@ -235,20 +260,29 @@ class FlowMetricViewModel(
         }
     }
 
+    /** Stores the preferred built-in agent type used by the tracking-management UI. */
+    fun updatePreferredAgentModelType(type: AgentModelTypePreference) {
+        persistAgentPreferences(appSettings.copy(preferredAgentModelType = type))
+    }
+
+    /** Reloads desktop error log entries from the local logger store. */
     fun refreshErrorLogs() {
         errorLogs = FlowMetricDesktopLogger.errorEntries()
     }
 
+    /** Deletes a single desktop error-log entry and refreshes the visible list. */
     fun deleteErrorLog(id: Int) {
         FlowMetricDesktopLogger.deleteError(id)
         refreshErrorLogs()
     }
 
+    /** Clears all stored desktop error logs. */
     fun clearErrorLogs() {
         FlowMetricDesktopLogger.clearErrors()
         refreshErrorLogs()
     }
 
+    /** Toggles a confidence filter and rebuilds analytics for the currently selected project. */
     fun toggleConfidence(level: ConfidenceLevel) {
         selectedConfidence = selectedConfidence.toMutableSet().also {
             if (level in it && it.size > 1) {
@@ -260,6 +294,10 @@ class FlowMetricViewModel(
         refresh(recountProjectLines = false)
     }
 
+    /**
+     * Reloads persisted events, rescans project statistics when needed, rebuilds dashboard data,
+     * and refreshes Git summary state.
+     */
     fun refresh(recountProjectLines: Boolean = true) {
         if (selectedProjectPath.isBlank()) {
             dashboard = null
@@ -368,11 +406,16 @@ class FlowMetricViewModel(
         }
     }
 
+    /** Releases watchers and coroutine resources when the desktop app disposes this view model. */
     fun dispose() {
         projectWatchService.close()
         scope.cancel()
     }
 
+    /**
+     * Selects a Git file observation and loads the best available diff preview, preferring tracked
+     * line patches before falling back to live Git diff generation.
+     */
     fun selectGitObservation(observation: GitFileObservation) {
         selectedGitCommit = null
         selectedGitObservation = observation
@@ -407,6 +450,7 @@ class FlowMetricViewModel(
         }
     }
 
+    /** Selects a Git commit and asynchronously loads its diff for inspection. */
     fun selectGitCommit(commit: GitCommitSummary) {
         selectedGitObservation = null
         selectedGitCommit = commit
@@ -424,6 +468,7 @@ class FlowMetricViewModel(
         }
     }
 
+    /** Clears commit selection and resets diff state when no tracked file observation is active. */
     fun selectUncommittedChanges() {
         selectedGitCommit = null
         if (selectedGitObservation == null) {
@@ -432,6 +477,7 @@ class FlowMetricViewModel(
         }
     }
 
+    /** Reverts the selected hunk from the currently loaded Git diff document. */
     fun revertSelectedGitHunk(hunkIndex: Int) {
         val projectPath = selectedProjectPath
         val document = gitDiffDocument ?: run {
@@ -457,6 +503,7 @@ class FlowMetricViewModel(
         }
     }
 
+    /** Reverts a single line inside the currently loaded Git diff document. */
     fun revertSelectedGitLine(hunkIndex: Int, lineIndex: Int) {
         val projectPath = selectedProjectPath
         val document = gitDiffDocument ?: run {
@@ -482,6 +529,7 @@ class FlowMetricViewModel(
         }
     }
 
+    /** Reverts a full Git-observed file and refreshes analytics on success. */
     fun revertGitObservation(observation: GitFileObservation) {
         val projectPath = selectedProjectPath
         if (projectPath.isBlank()) return
@@ -505,6 +553,7 @@ class FlowMetricViewModel(
         }
     }
 
+    /** Reverts a grouped set of Git-observed files and refreshes analytics on success. */
     fun revertGitObservationGroup(observations: List<GitFileObservation>) {
         val projectPath = selectedProjectPath
         if (projectPath.isBlank()) return
@@ -526,6 +575,10 @@ class FlowMetricViewModel(
         }
     }
 
+    /**
+     * Saves per-project ignore rules, resets external event capture state, and refreshes project
+     * analytics to reflect the new filtering rules.
+     */
     fun saveProjectConfig(
         ignoredExtensions: Set<String>,
         ignoredPathFragments: List<String>,
@@ -561,20 +614,44 @@ class FlowMetricViewModel(
         }
     }
 
-    fun installCodexTracking() {
+    /**
+     * Installs or refreshes the AGENTS and recorder-script files for the selected project using
+     * the currently selected built-in agent label and model name.
+     */
+    fun installConfiguredTracking() {
         val projectPath = selectedProjectPath.ifBlank { projectPathInput.trim() }
         if (projectPath.isBlank()) {
             statusMessage = "Select a project before installing tracking."
             return
         }
 
-        statusMessage = "Installing Codex tracking..."
+        val preferredAgentLabel = preferredAgentLabel()
+        val preferredAgentModelName = preferredAgentModelName()
+        statusMessage = "Preparing tracking files for $preferredAgentLabel ($preferredAgentModelName)..."
         scope.launch {
-            val result = withContext(Dispatchers.IO) {
-                trackingInstaller.installCodexTracking(Path.of(projectPath))
+            val (result, status) = withContext(Dispatchers.IO) {
+                val projectRoot = Path.of(projectPath)
+                trackingInstaller.installTracking(
+                    projectRoot = projectRoot,
+                    sourceLabel = preferredAgentLabel,
+                    agentModel = preferredAgentModelName,
+                ) to trackingInstaller.inspectTracking(projectRoot)
             }
+            trackingStatus = status
             statusMessage = result.message
         }
+    }
+
+    /** Re-checks whether AGENTS and recorder scripts are present for the selected project root. */
+    fun refreshTrackingStatus() {
+        val projectPath = selectedProjectPath.ifBlank { projectPathInput.trim() }
+        if (projectPath.isBlank()) {
+            trackingStatus = null
+            statusMessage = "Select a project before checking tracking files."
+            return
+        }
+
+        updateTrackingStatus(projectPath, announce = true)
     }
 
     private fun startWatchingProject(projectPath: String) {
@@ -608,6 +685,54 @@ class FlowMetricViewModel(
                 }
                 refresh(recountProjectLines = false)
             }
+        }
+    }
+
+    private fun persistAgentPreferences(settings: DesktopAppSettings) {
+        val normalizedSettings = settings.normalized()
+        appSettingsStore.write(normalizedSettings)
+        appSettings = normalizedSettings
+    }
+
+    private fun preferredAgentLabel(): String = when (appSettings.preferredAgentModelType) {
+        AgentModelTypePreference.CODEX -> "Codex"
+        AgentModelTypePreference.GEMINI -> "Gemini"
+        AgentModelTypePreference.OTHER -> "Gemini"
+    }
+
+    private fun preferredAgentModelName(): String = when (appSettings.preferredAgentModelType) {
+        AgentModelTypePreference.CODEX -> "gpt-5-codex"
+        AgentModelTypePreference.GEMINI -> "gemini"
+        AgentModelTypePreference.OTHER -> "gemini"
+    }
+
+    private fun updateTrackingStatus(projectPath: String, announce: Boolean = false) {
+        scope.launch {
+            val status = withContext(Dispatchers.IO) {
+                trackingInstaller.inspectTracking(Path.of(projectPath))
+            }
+            if (selectedProjectPath == projectPath || projectPathInput.trim() == projectPath) {
+                trackingStatus = status
+                if (announce) {
+                    statusMessage = trackingStatusSummary(status)
+                }
+            }
+        }
+    }
+
+    private fun trackingStatusSummary(status: TrackingProjectStatus): String = when {
+        !status.projectExists -> "Selected project path does not exist."
+        status.allRequiredFilesPresent -> "Check complete: AGENTS.md and both recorder scripts are present."
+        else -> buildString {
+            append("Check complete: missing ")
+            append(
+                listOfNotNull(
+                    "AGENTS.md".takeUnless { status.agentsFileExists },
+                    "record_codex_edit.sh".takeUnless { status.editScriptExists },
+                    "record_codex_batch.sh".takeUnless { status.batchScriptExists },
+                ).joinToString(", "),
+            )
+            append(".")
         }
     }
 }

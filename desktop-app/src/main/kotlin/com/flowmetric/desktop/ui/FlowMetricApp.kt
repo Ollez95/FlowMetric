@@ -18,12 +18,16 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.ExpandLess
+import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Button
+import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.PrimaryTabRow
 import androidx.compose.material3.Tab
@@ -38,10 +42,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.flowmetric.desktop.install.TrackingProjectStatus
+import com.flowmetric.desktop.persistence.AgentModelTypePreference
 import com.flowmetric.desktop.viewmodel.FlowMetricViewModel
 import com.flowmetric.shared.model.ChangeEvent
 import com.flowmetric.shared.model.ChangeClassification
@@ -59,7 +64,7 @@ fun FlowMetricApp(viewModel: FlowMetricViewModel = remember { FlowMetricViewMode
     }
     FlowMetricTheme(themePreference = viewModel.appSettings.theme) {
         var selectedEventFile by remember { mutableStateOf<FileEstimate?>(null) }
-        var selectedEvent by remember { mutableStateOf<ChangeEvent?>(null) }
+        var selectedEvent by remember { mutableStateOf<EventHistoryEntrySummary?>(null) }
         var selectedTab by remember { mutableStateOf(viewModel.appSettings.defaultTab.toAnalyticsTab()) }
         var configDialogOpen by remember { mutableStateOf(false) }
         val dashboard = viewModel.dashboard
@@ -112,7 +117,6 @@ fun FlowMetricApp(viewModel: FlowMetricViewModel = remember { FlowMetricViewMode
                         viewModel.refreshErrorLogs()
                         configDialogOpen = true
                     },
-                    onInstallTracking = viewModel::installCodexTracking,
                     isLoading = viewModel.isLoading,
                     statusMessage = viewModel.statusMessage,
                 )
@@ -152,6 +156,14 @@ fun FlowMetricApp(viewModel: FlowMetricViewModel = remember { FlowMetricViewMode
                             }
                             SummarySection(dashboard.estimatedAiLines, dashboard.estimatedNonAiLines, dashboard.aiPercentage, dashboard.nonAiPercentage)
                             TrendSection(dashboard.trends)
+                            EventSourceGuideCard(
+                                projectPath = viewModel.selectedProjectPath.ifBlank { viewModel.projectPathInput.trim() },
+                                trackingStatus = viewModel.trackingStatus,
+                                modelType = viewModel.appSettings.preferredAgentModelType,
+                                onModelTypeSelected = viewModel::updatePreferredAgentModelType,
+                                onCheckFiles = viewModel::refreshTrackingStatus,
+                                onInstallTracking = viewModel::installConfiguredTracking,
+                            )
                             EventsSection(
                                 files = dashboard.files,
                                 events = filteredEventHistory,
@@ -289,6 +301,219 @@ private fun EventsSetupNotice() {
 }
 
 @Composable
+private fun EventSourceGuideCard(
+    projectPath: String,
+    trackingStatus: TrackingProjectStatus?,
+    modelType: AgentModelTypePreference,
+    onModelTypeSelected: (AgentModelTypePreference) -> Unit,
+    onCheckFiles: () -> Unit,
+    onInstallTracking: () -> Unit,
+) {
+    val hasProject = projectPath.isNotBlank()
+    val selectedModelLabel = when (modelType) {
+        AgentModelTypePreference.CODEX -> "Codex"
+        AgentModelTypePreference.GEMINI -> "Gemini"
+        AgentModelTypePreference.OTHER -> "Gemini"
+    }
+    val selectedAgentModelName = when (modelType) {
+        AgentModelTypePreference.CODEX -> "gpt-5-codex"
+        AgentModelTypePreference.GEMINI -> "gemini"
+        AgentModelTypePreference.OTHER -> "gemini"
+    }
+    var managementExpanded by remember { mutableStateOf(true) }
+
+    Card(shape = RoundedCornerShape(20.dp), modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { managementExpanded = !managementExpanded },
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("Agent / Plugin Management", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        if (managementExpanded) "Hide" else "Show",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 12.sp,
+                    )
+                    Icon(
+                        imageVector = if (managementExpanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("Explicit agent tracking", fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurface)
+                Text(
+                    "Manage the local tracking files here instead of the header menu. FlowMetric can check whether `AGENTS.md` and the recorder scripts already exist, add the missing files, and tag new events with the selected model label.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (managementExpanded) {
+                Card(shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
+                            .padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Text("Selected project", fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurface)
+                        Text(
+                            if (hasProject) projectPath else "Choose a project first.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            "Choose one of the built-in model labels for agent-generated events.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 12.sp,
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            if (modelType == AgentModelTypePreference.CODEX) {
+                                Button(onClick = { onModelTypeSelected(AgentModelTypePreference.CODEX) }) {
+                                    Text("Codex")
+                                }
+                            } else {
+                                OutlinedButton(onClick = { onModelTypeSelected(AgentModelTypePreference.CODEX) }) {
+                                    Text("Codex")
+                                }
+                            }
+                            if (modelType == AgentModelTypePreference.GEMINI || modelType == AgentModelTypePreference.OTHER) {
+                                Button(onClick = { onModelTypeSelected(AgentModelTypePreference.GEMINI) }) {
+                                    Text("Gemini")
+                                }
+                            } else {
+                                OutlinedButton(onClick = { onModelTypeSelected(AgentModelTypePreference.GEMINI) }) {
+                                    Text("Gemini")
+                                }
+                            }
+                        }
+                        Text(
+                            "Event tag for new agent changes: $selectedModelLabel",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            "Model recorded for new agent changes: $selectedAgentModelName",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        TrackingStatusRow(
+                            label = "Project root",
+                            status = when {
+                                !hasProject -> "Not selected"
+                                trackingStatus == null -> "Unchecked"
+                                trackingStatus.projectExists -> "Ready"
+                                else -> "Missing"
+                            },
+                            accent = when {
+                                !hasProject -> FlowMetricSlate
+                                trackingStatus?.projectExists == true -> FlowMetricTeal
+                                else -> FlowMetricOrange
+                            },
+                        )
+                        TrackingStatusRow(
+                            label = "AGENTS.md",
+                            status = when {
+                                !hasProject -> "Not selected"
+                                trackingStatus == null -> "Unchecked"
+                                trackingStatus.agentsFileExists -> "Exists"
+                                else -> "Missing"
+                            },
+                            accent = when {
+                                trackingStatus?.agentsFileExists == true -> FlowMetricTeal
+                                trackingStatus == null -> FlowMetricSlate
+                                else -> FlowMetricOrange
+                            },
+                        )
+                        TrackingStatusRow(
+                            label = "scripts/record_codex_edit.sh",
+                            status = when {
+                                !hasProject -> "Not selected"
+                                trackingStatus == null -> "Unchecked"
+                                trackingStatus.editScriptExists -> "Exists"
+                                else -> "Missing"
+                            },
+                            accent = when {
+                                trackingStatus?.editScriptExists == true -> FlowMetricTeal
+                                trackingStatus == null -> FlowMetricSlate
+                                else -> FlowMetricOrange
+                            },
+                        )
+                        TrackingStatusRow(
+                            label = "scripts/record_codex_batch.sh",
+                            status = when {
+                                !hasProject -> "Not selected"
+                                trackingStatus == null -> "Unchecked"
+                                trackingStatus.batchScriptExists -> "Exists"
+                                else -> "Missing"
+                            },
+                            accent = when {
+                                trackingStatus?.batchScriptExists == true -> FlowMetricTeal
+                                trackingStatus == null -> FlowMetricSlate
+                                else -> FlowMetricOrange
+                            },
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(onClick = onCheckFiles, enabled = hasProject) {
+                                Text("Check files")
+                            }
+                            Button(onClick = onInstallTracking, enabled = hasProject) {
+                                Text(
+                                    if (trackingStatus?.allRequiredFilesPresent == true) {
+                                        "Refresh agent files"
+                                    } else {
+                                        "Add agent files"
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("Heuristics option", fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurface)
+                Text(
+                    "If there is no explicit agent or plugin record, FlowMetric can still estimate whether a change was likely AI-assisted or non-AI from edit patterns. That result is heuristic, not exact attribution.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TrackingStatusRow(
+    label: String,
+    status: String,
+    accent: Color,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, color = MaterialTheme.colorScheme.onSurface)
+        Box(
+            modifier = Modifier
+                .background(accent.copy(alpha = 0.14f), RoundedCornerShape(999.dp))
+                .padding(horizontal = 10.dp, vertical = 4.dp),
+        ) {
+            Text(
+                status,
+                color = accent,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+    }
+}
+
+@Composable
 private fun FilterPanel(
     lookbackDays: Int,
     selectedConfidence: Set<ConfidenceLevel>,
@@ -378,33 +603,60 @@ internal fun RowScope.SummaryCard(title: String, value: String, accent: Color) {
 
 @Composable
 private fun TrendSection(points: List<com.flowmetric.shared.model.TrendPoint>) {
+    var trendExpanded by remember { mutableStateOf(true) }
+
     Card(shape = RoundedCornerShape(20.dp), modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Trend", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
-            if (points.isEmpty()) {
-                Text("No tracked changes in the selected range.")
-            } else {
-                points.forEach { point ->
-                    val total = (point.estimatedAiLines + point.estimatedNonAiLines).coerceAtLeast(1)
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(point.dayLabel)
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(16.dp)
-                                .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(999.dp)),
-                        ) {
-                            Box(
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { trendExpanded = !trendExpanded },
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("Trend", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        if (trendExpanded) "Hide" else "Show",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 12.sp,
+                    )
+                    Icon(
+                        imageVector = if (trendExpanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            if (trendExpanded) {
+                if (points.isEmpty()) {
+                    Text("No tracked changes in the selected range.")
+                } else {
+                    points.forEach { point ->
+                        val total = (point.estimatedAiLines + point.estimatedNonAiLines).coerceAtLeast(1)
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(point.dayLabel)
+                            Row(
                                 modifier = Modifier
-                                    .fillMaxHeight()
-                                    .fillMaxWidth((point.estimatedAiLines.toFloat() / total.toFloat()).coerceIn(0f, 1f))
-                                    .background(FlowMetricOrange, RoundedCornerShape(999.dp)),
+                                    .fillMaxWidth()
+                                    .height(16.dp)
+                                    .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(999.dp)),
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxHeight()
+                                        .fillMaxWidth((point.estimatedAiLines.toFloat() / total.toFloat()).coerceIn(0f, 1f))
+                                        .background(FlowMetricOrange, RoundedCornerShape(999.dp)),
+                                )
+                            }
+                            Text(
+                                "Estimated AI ${point.estimatedAiLines} | Estimated non-AI ${point.estimatedNonAiLines}",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
-                        Text(
-                            "Estimated AI ${point.estimatedAiLines} | Estimated non-AI ${point.estimatedNonAiLines}",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
                     }
                 }
             }
@@ -416,7 +668,7 @@ private fun TrendSection(points: List<com.flowmetric.shared.model.TrendPoint>) {
 private fun EventsSection(
     files: List<FileEstimate>,
     events: List<ChangeEvent>,
-    onSelectEvent: (ChangeEvent, FileEstimate?) -> Unit,
+    onSelectEvent: (EventHistoryEntrySummary, FileEstimate?) -> Unit,
 ) {
     val groupedEvents = remember(events) { eventHistoryGroups(events) }
     val pageCount = groupedEvents.pageCount(EVENT_HISTORY_GROUPS_PER_PAGE)
@@ -477,9 +729,10 @@ private fun EventsSection(
         }
         visibleGroups.forEachIndexed { index, group ->
             val accent = timelineColors[index % timelineColors.size]
-            val uniqueFiles = group.map { it.filePath }.distinct()
-            val newestTimestamp = group.maxOf { it.timestampEpochMillis }
-            val oldestTimestamp = group.minOf { it.timestampEpochMillis }
+            val fileEntries = remember(group) { summarizeEventHistoryGroup(group) }
+            val uniqueFiles = fileEntries.map { it.filePath }
+            val newestTimestamp = fileEntries.maxOf { it.latestTimestampEpochMillis }
+            val oldestTimestamp = fileEntries.minOf { it.oldestTimestampEpochMillis }
             Card(
                 shape = RoundedCornerShape(18.dp),
                 modifier = Modifier
@@ -532,33 +785,78 @@ private fun EventsSection(
                             )
                         }
                     }
-                    group.forEach { event ->
-                        val fileEstimate = fileByPath[event.filePath]
+                    fileEntries.forEach { entry ->
+                        val fileEstimate = fileByPath[entry.filePath]
+                        val entryColor = classificationColor(entry.classification)
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f), RoundedCornerShape(14.dp))
-                                .clickable { onSelectEvent(event, fileEstimate) }
+                                .background(entryColor.copy(alpha = 0.12f), RoundedCornerShape(14.dp))
+                                .clickable { onSelectEvent(entry, fileEstimate) }
                                 .padding(12.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
                         ) {
                             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                Text(event.filePath, fontWeight = FontWeight.Medium)
+                                Text(entry.filePath, fontWeight = FontWeight.Medium)
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Box(
+                                        modifier = Modifier
+                                            .background(entryColor.copy(alpha = 0.18f), RoundedCornerShape(999.dp))
+                                            .padding(horizontal = 10.dp, vertical = 4.dp),
+                                    ) {
+                                        Text(
+                                            when (entry.classification) {
+                                                ChangeClassification.ESTIMATED_AI_GENERATED -> "AI GENERATED"
+                                                ChangeClassification.ESTIMATED_NON_AI -> "NON AI GENERATED"
+                                                ChangeClassification.MIXED_OR_UNCLEAR -> "MIXED / UNCLEAR"
+                                            },
+                                            color = entryColor,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                        )
+                                    }
+                                    Box(
+                                        modifier = Modifier
+                                            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.72f), RoundedCornerShape(999.dp))
+                                            .padding(horizontal = 10.dp, vertical = 4.dp),
+                                    ) {
+                                        Text(
+                                            formatEventSourceTypeTag(entry.representativeEvent),
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Medium,
+                                        )
+                                    }
+                                    formatEventAgentTag(entry.representativeEvent)?.let { agentTag ->
+                                        Box(
+                                            modifier = Modifier
+                                                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.72f), RoundedCornerShape(999.dp))
+                                                .padding(horizontal = 10.dp, vertical = 4.dp),
+                                        ) {
+                                            Text(
+                                                agentTag,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Medium,
+                                            )
+                                        }
+                                    }
+                                }
                                 Text(
-                                    classificationLabel(event.snapshot.classification),
-                                    color = classificationColor(event.snapshot.classification),
+                                    "AI lines: ${entry.estimatedAiLines} | Non-AI lines: ${entry.estimatedNonAiLines}",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     fontSize = 12.sp,
                                 )
                                 Text(
-                                    "Changed: ${formatTimestamp(event.timestampEpochMillis)}",
+                                    "Changed: ${formatTimestamp(entry.oldestTimestampEpochMillis)} to ${formatTimestamp(entry.latestTimestampEpochMillis)}",
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     fontSize = 12.sp,
                                 )
                             }
                             Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                Text("${event.delta.changedLines} changed")
+                                Text("${entry.changedLines} changed")
                                 Text(
-                                    "Confidence: ${event.snapshot.confidence.name.lowercase().replaceFirstChar(Char::uppercase)}",
+                                    "Confidence: ${entry.confidence.name.lowercase().replaceFirstChar(Char::uppercase)}",
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     fontSize = 12.sp,
                                 )
@@ -575,7 +873,7 @@ private fun EventsSection(
 private fun DetailPanel(
     modifier: Modifier,
     selectedFile: FileEstimate?,
-    selectedEvent: ChangeEvent?,
+    selectedEvent: EventHistoryEntrySummary?,
 ) {
     Card(modifier = modifier, shape = RoundedCornerShape(24.dp)) {
         Column(
@@ -598,45 +896,29 @@ private fun DetailPanel(
                 Text(File(displayedPath).name, fontWeight = FontWeight.SemiBold, fontSize = 20.sp)
                 Text(displayedPath, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 if (selectedEvent != null) {
-                    Text("Selected event: ${formatter.format(Date(selectedEvent.timestampEpochMillis))}")
-                    Text("Changed lines in event: ${selectedEvent.delta.changedLines}")
-                    Text("Inserted lines: ${selectedEvent.delta.inserted}")
-                    Text("Deleted lines: ${selectedEvent.delta.deleted}")
-                    Text("Estimated AI-generated lines in event: ${selectedEvent.snapshot.estimatedAiLines}")
-                    Text("Estimated non-AI lines in event: ${selectedEvent.snapshot.estimatedNonAiLines}")
-                    Text("Likely status: ${classificationLabel(selectedEvent.snapshot.classification)}")
-                    Text("Confidence: ${selectedEvent.snapshot.confidence.name.lowercase().replaceFirstChar(Char::uppercase)}")
+                    Text("Selected block: ${formatter.format(Date(selectedEvent.oldestTimestampEpochMillis))} to ${formatter.format(Date(selectedEvent.latestTimestampEpochMillis))}")
+                    Text("Changed lines in block: ${selectedEvent.changedLines}")
+                    Text("Inserted lines in block: ${selectedEvent.insertedLines}")
+                    Text("Deleted lines in block: ${selectedEvent.deletedLines}")
+                    Text("Estimated AI-generated lines in block: ${selectedEvent.estimatedAiLines}")
+                    Text("Estimated non-AI lines in block: ${selectedEvent.estimatedNonAiLines}")
+                    Text("Likely status: ${classificationLabel(selectedEvent.classification)}")
+                    Text("Confidence: ${selectedEvent.confidence.name.lowercase().replaceFirstChar(Char::uppercase)}")
                     Card(shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
                         Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text("Selected event metadata", fontWeight = FontWeight.SemiBold)
-                            Text("Observed at: ${formatter.format(Date(selectedEvent.timestampEpochMillis))}")
-                            Text("Source: ${selectedEvent.metadata.source.name.lowercase().replace('_', ' ')}")
-                            selectedEvent.metadata.sourceLabel?.let { Text("Source label: $it") }
-                            selectedEvent.metadata.agentModel?.let { Text("Model: $it") }
-                            selectedEvent.metadata.branchName?.let { Text("Branch: $it") }
-                            selectedEvent.metadata.headCommitHash?.let { Text("Commit: ${it.take(12)}") }
-                            Text("Session event index: ${selectedEvent.metadata.sessionEventIndex}")
-                            Text("Files touched in session: ${selectedEvent.metadata.filesTouchedInSession}")
+                            Text("Selected block metadata", fontWeight = FontWeight.SemiBold)
+                            Text("Events merged in block: ${selectedEvent.events.size}")
+                            Text("Latest observed at: ${formatter.format(Date(selectedEvent.representativeEvent.timestampEpochMillis))}")
+                            Text("Source: ${formatEventSourceTypeTag(selectedEvent.representativeEvent)}")
+                            formatEventAgentTag(selectedEvent.representativeEvent)?.let { Text("Agent: $it") }
+                            selectedEvent.representativeEvent.metadata.agentModel?.let { Text("Model: $it") }
+                            selectedEvent.representativeEvent.metadata.branchName?.let { Text("Branch: $it") }
+                            selectedEvent.representativeEvent.metadata.headCommitHash?.let { Text("Commit: ${it.take(12)}") }
+                            Text("Session event index: ${selectedEvent.representativeEvent.metadata.sessionEventIndex}")
+                            Text("Files touched in session: ${selectedEvent.representativeEvent.metadata.filesTouchedInSession}")
                         }
                     }
-                    selectedEvent.metadata.linePatch?.let { linePatch ->
-                        Card(shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
-                            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Text("Changed lines in this event", fontWeight = FontWeight.SemiBold)
-                                Text(
-                                    "Estimated AI-generated lines: ${selectedEvent.snapshot.estimatedAiLines} | " +
-                                        "Estimated non-AI lines: ${selectedEvent.snapshot.estimatedNonAiLines}",
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                                Text(
-                                    linePatch,
-                                    fontFamily = FontFamily.Monospace,
-                                    fontSize = 12.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        }
-                    }
+                    EventClassificationCard(selectedEvent)
                 } else {
                     Text("Latest tracked change: ${formatter.format(Date(selectedFile.latestTimestampEpochMillis))}")
                     Text("Changed lines in selected range: ${selectedFile.changedLines}")
@@ -652,6 +934,39 @@ private fun DetailPanel(
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun EventClassificationCard(selectedEvent: EventHistoryEntrySummary) {
+    val classificationColor = classificationColor(selectedEvent.classification)
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(classificationColor.copy(alpha = 0.12f))
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text("Block Classification", fontWeight = FontWeight.SemiBold)
+            Text(
+                when (selectedEvent.classification) {
+                    ChangeClassification.ESTIMATED_AI_GENERATED -> "AI Generated"
+                    ChangeClassification.ESTIMATED_NON_AI -> "Non AI Generated"
+                    ChangeClassification.MIXED_OR_UNCLEAR -> "Mixed / Unclear"
+                },
+                color = classificationColor,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
+            )
+            Text(
+                "AI lines: ${selectedEvent.estimatedAiLines} | Non-AI lines: ${selectedEvent.estimatedNonAiLines}",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
@@ -685,6 +1000,36 @@ private fun eventHistoryGroups(events: List<ChangeEvent>): List<List<ChangeEvent
         .values
         .sortedByDescending { group -> group.maxOf { it.timestampEpochMillis } }
 
+private fun summarizeEventHistoryGroup(events: List<ChangeEvent>): List<EventHistoryEntrySummary> =
+    events
+        .groupBy { it.filePath }
+        .values
+        .map { sameFileEvents ->
+            val sortedEvents = sameFileEvents.sortedByDescending { it.timestampEpochMillis }
+            val classification = summarizeBlockClassification(sortedEvents)
+            val representativeEvent = when (classification) {
+                ChangeClassification.ESTIMATED_AI_GENERATED ->
+                    sortedEvents.firstOrNull { it.snapshot.classification == ChangeClassification.ESTIMATED_AI_GENERATED }
+                        ?: sortedEvents.first()
+                else -> sortedEvents.first()
+            }
+            EventHistoryEntrySummary(
+                filePath = representativeEvent.filePath,
+                events = sortedEvents,
+                representativeEvent = representativeEvent,
+                oldestTimestampEpochMillis = sortedEvents.minOf { it.timestampEpochMillis },
+                latestTimestampEpochMillis = sortedEvents.maxOf { it.timestampEpochMillis },
+                classification = classification,
+                confidence = sortedEvents.maxBy { it.snapshot.confidence.rank() }.snapshot.confidence,
+                changedLines = sortedEvents.sumOf { it.delta.changedLines },
+                insertedLines = sortedEvents.sumOf { it.delta.inserted },
+                deletedLines = sortedEvents.sumOf { it.delta.deleted },
+                estimatedAiLines = sortedEvents.sumOf { it.snapshot.estimatedAiLines },
+                estimatedNonAiLines = sortedEvents.sumOf { it.snapshot.estimatedNonAiLines },
+            )
+        }
+        .sortedByDescending { it.latestTimestampEpochMillis }
+
 private fun <T> List<T>.pageCount(pageSize: Int): Int =
     if (isEmpty()) 0 else ((size - 1) / pageSize) + 1
 
@@ -697,6 +1042,47 @@ private fun <T> List<T>.pageSlice(pageIndex: Int, pageSize: Int): List<T> {
 
 private fun bucketStart(epochMillis: Long): Long =
     epochMillis - (epochMillis % EVENT_HISTORY_BUCKET_MS)
+
+private fun summarizeBlockClassification(events: List<ChangeEvent>): ChangeClassification = when {
+    events.any { it.snapshot.classification == ChangeClassification.ESTIMATED_AI_GENERATED } ->
+        ChangeClassification.ESTIMATED_AI_GENERATED
+    events.all { it.snapshot.classification == ChangeClassification.ESTIMATED_NON_AI } ->
+        ChangeClassification.ESTIMATED_NON_AI
+    else -> ChangeClassification.MIXED_OR_UNCLEAR
+}
+
+private fun formatEventSourceTypeTag(event: ChangeEvent): String = when (event.metadata.source) {
+    com.flowmetric.shared.model.EventSource.AI_PATCH,
+    com.flowmetric.shared.model.EventSource.CODEX_PATCH -> "AI PATCH"
+    com.flowmetric.shared.model.EventSource.EXTERNAL_FILE_CHANGE -> "EXTERNAL FILE CHANGE"
+    com.flowmetric.shared.model.EventSource.DOCUMENT_SAVE -> "DOCUMENT SAVE"
+    com.flowmetric.shared.model.EventSource.MANUAL_IMPORT -> "MANUAL IMPORT"
+}
+
+private fun formatEventAgentTag(event: ChangeEvent): String? =
+    event.metadata.sourceLabel
+        ?.takeIf { it.isNotBlank() }
+
+private fun ConfidenceLevel.rank(): Int = when (this) {
+    ConfidenceLevel.LOW -> 0
+    ConfidenceLevel.MEDIUM -> 1
+    ConfidenceLevel.HIGH -> 2
+}
+
+private data class EventHistoryEntrySummary(
+    val filePath: String,
+    val events: List<ChangeEvent>,
+    val representativeEvent: ChangeEvent,
+    val oldestTimestampEpochMillis: Long,
+    val latestTimestampEpochMillis: Long,
+    val classification: ChangeClassification,
+    val confidence: ConfidenceLevel,
+    val changedLines: Int,
+    val insertedLines: Int,
+    val deletedLines: Int,
+    val estimatedAiLines: Int,
+    val estimatedNonAiLines: Int,
+)
 
 private enum class AnalyticsTab(val title: String) {
     GIT("Git"),

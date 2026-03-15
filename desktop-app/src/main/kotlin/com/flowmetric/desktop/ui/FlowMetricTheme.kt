@@ -8,6 +8,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import com.flowmetric.desktop.persistence.DesktopThemePreference
 
+/**
+ * Custom color definitions for the FlowMetric application.
+ */
 internal val FlowMetricOrange = Color(0xFFD96C2F)
 internal val FlowMetricTeal = Color(0xFF2A7F62)
 internal val FlowMetricSlate = Color(0xFF49616D)
@@ -15,6 +18,9 @@ internal val FlowMetricPlum = Color(0xFF7A3E65)
 internal val FlowMetricGold = Color(0xFFB7791F)
 internal val FlowMetricInk = Color(0xFF172A3A)
 
+/**
+ * Defines the light color scheme for the FlowMetric application, using Material Design 3.
+ */
 private val LightFlowMetricColorScheme = lightColorScheme(
     primary = FlowMetricOrange,
     onPrimary = Color.White,
@@ -31,6 +37,9 @@ private val LightFlowMetricColorScheme = lightColorScheme(
     outline = Color(0xFFC2B7A3),
 )
 
+/**
+ * Defines the dark color scheme for the FlowMetric application, using Material Design 3.
+ */
 private val DarkFlowMetricColorScheme = darkColorScheme(
     primary = Color(0xFFF0A260),
     onPrimary = Color(0xFF42210A),
@@ -47,6 +56,13 @@ private val DarkFlowMetricColorScheme = darkColorScheme(
     outline = Color(0xFF728089),
 )
 
+/**
+ * A Composable function that applies the FlowMetric Material Design 3 theme to its content.
+ * It dynamically selects between light and dark themes based on the [themePreference].
+ *
+ * @param themePreference The user's preference for the theme (System, Light, or Dark).
+ * @param content The UI content to which the theme should be applied.
+ */
 @Composable
 internal fun FlowMetricTheme(
     themePreference: DesktopThemePreference,

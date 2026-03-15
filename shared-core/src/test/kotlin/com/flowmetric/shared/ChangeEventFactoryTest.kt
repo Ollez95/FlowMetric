@@ -11,7 +11,7 @@ class ChangeEventFactoryTest {
     private val factory = ChangeEventFactory()
 
     @Test
-    fun `codex metadata includes model when provided`() {
+    fun `ai patch metadata includes model when provided`() {
         val prepared = factory.build(
             ChangeEventRequest(
                 projectPath = "/tmp/project",
@@ -21,7 +21,7 @@ class ChangeEventFactoryTest {
                 agentModel = "gpt-5-codex",
                 previousText = "fun main() = println(\"old\")\n",
                 currentText = "fun main() = println(\"new\")\n",
-                source = EventSource.CODEX_PATCH,
+                source = EventSource.AI_PATCH,
                 existingEvents = emptyList(),
                 timestampEpochMillis = 1_000L,
             ),
@@ -32,7 +32,7 @@ class ChangeEventFactoryTest {
     }
 
     @Test
-    fun `codex metadata includes generated line patch`() {
+    fun `ai patch metadata includes generated line patch`() {
         val prepared = factory.build(
             ChangeEventRequest(
                 projectPath = "/tmp/project",
@@ -41,7 +41,7 @@ class ChangeEventFactoryTest {
                 sourceLabel = "Codex",
                 previousText = "fun main() = println(\"old\")\n",
                 currentText = "fun main() = println(\"new\")\n",
-                source = EventSource.CODEX_PATCH,
+                source = EventSource.AI_PATCH,
                 existingEvents = emptyList(),
                 timestampEpochMillis = 1_000L,
             ),

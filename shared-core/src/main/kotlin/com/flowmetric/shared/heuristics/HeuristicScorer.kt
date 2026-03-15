@@ -39,7 +39,7 @@ class HeuristicScorer {
             )
         }
 
-        if (context.currentSource == EventSource.CODEX_PATCH) {
+        if (context.currentSource == EventSource.AI_PATCH || context.currentSource == EventSource.CODEX_PATCH) {
             return HeuristicSnapshot(
                 classification = ChangeClassification.ESTIMATED_AI_GENERATED,
                 confidence = ConfidenceLevel.HIGH,
@@ -47,7 +47,7 @@ class HeuristicScorer {
                 estimatedAiLines = changedLines,
                 estimatedNonAiLines = 0,
                 matchedSignals = listOf(HeuristicSignal.CONTIGUOUS_BLOCK_INSERTION),
-                notes = "Recorded as an explicit Codex patch event rather than inferred from heuristics.",
+                notes = "Recorded as an explicit AI patch event rather than inferred from heuristics.",
             )
         }
 
@@ -72,7 +72,7 @@ class HeuristicScorer {
                     signals += HeuristicSignal.CONTIGUOUS_BLOCK_INSERTION
                 }
 
-                EventSource.DOCUMENT_SAVE, EventSource.MANUAL_IMPORT -> {
+                EventSource.DOCUMENT_SAVE, EventSource.MANUAL_IMPORT, EventSource.AI_PATCH, EventSource.CODEX_PATCH -> {
                     aiScore += if (largestInsertedBlock >= 24) 0.12 else 0.06
                     signals += HeuristicSignal.CONTIGUOUS_BLOCK_INSERTION
                 }

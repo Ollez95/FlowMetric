@@ -75,12 +75,12 @@ class HeuristicScorerTest {
     }
 
     @Test
-    fun `explicit codex patch is treated as direct codex attribution`() {
+    fun `explicit ai patch is treated as direct ai attribution`() {
         val snapshot = scorer.score(
             insertedLines = 7,
             deletedLines = 2,
             timestampEpochMillis = 1_000L,
-            context = HeuristicContext(currentSource = EventSource.CODEX_PATCH),
+            context = HeuristicContext(currentSource = EventSource.AI_PATCH),
         )
 
         assertEquals(ChangeClassification.ESTIMATED_AI_GENERATED, snapshot.classification)

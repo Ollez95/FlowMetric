@@ -1,6 +1,17 @@
 package com.flowmetric.shared.analytics
 
+/**
+ * Generates a unified diff-style patch string between two texts.
+ */
 object LinePatchBuilder {
+    /**
+     * Constructs a patch string in a format similar to the unified diff format.
+     *
+     * @param previousText The original text content.
+     * @param currentText The modified text content.
+     * @return A patch string if there are differences, or `null` if the texts are identical.
+     *         The patch format consists of one or more "hunks", each representing a section of changes.
+     */
     fun build(previousText: String, currentText: String): String? {
         val previousLines = previousText.lines()
         val currentLines = currentText.lines()
@@ -78,6 +89,15 @@ object LinePatchBuilder {
         return chunks.joinToString("\n")
     }
 
+    /**
+     * Computes the difference between two lists of strings using a dynamic programming
+     * approach based on the Longest Common Subsequence (LCS) algorithm.
+     *
+     * @param left The original list of lines.
+     * @param right The modified list of lines.
+     * @return A list of [DiffOp] operations (Insert, Delete, Equal) representing
+     *         the edit script to transform the `left` list into the `right` list.
+     */
     private fun computeOperations(left: List<String>, right: List<String>): List<DiffOp> {
         val dp = Array(left.size + 1) { IntArray(right.size + 1) }
         for (leftIndex in left.indices.reversed()) {
@@ -128,8 +148,14 @@ object LinePatchBuilder {
     }
 }
 
+/**
+ * Represents a single operation in a diff sequence.
+ */
 private sealed interface DiffOp {
+    /** Indicates a line that is common to both texts. */
     data class Equal(val line: String) : DiffOp
+    /** Indicates a line that was deleted from the original text. */
     data class Delete(val line: String) : DiffOp
+    /** Indicates a line that was added to the new text. */
     data class Insert(val line: String) : DiffOp
 }

@@ -49,10 +49,13 @@ data class ChangeMetadata(
     val filesTouchedInSession: Int = 1,
 )
 
+//TODO: Remove CODEX_PATCH when database is restarted..
+
 @Serializable
 enum class EventSource {
     DOCUMENT_SAVE,
     EXTERNAL_FILE_CHANGE,
+    AI_PATCH,
     CODEX_PATCH,
     MANUAL_IMPORT,
 }

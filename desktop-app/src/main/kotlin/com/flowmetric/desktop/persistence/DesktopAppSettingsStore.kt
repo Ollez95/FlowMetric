@@ -22,15 +22,29 @@ enum class StartupTabPreference {
 }
 
 @Serializable
+enum class AgentModelTypePreference {
+    CODEX,
+    GEMINI,
+    OTHER,
+}
+
+@Serializable
 data class DesktopAppSettings(
     val theme: DesktopThemePreference = DesktopThemePreference.SYSTEM,
     val reopenLastProjectOnLaunch: Boolean = true,
     val refreshAutomaticallyOnWatchedChanges: Boolean = true,
     val defaultTab: StartupTabPreference = StartupTabPreference.GIT,
     val defaultLookbackDays: Int = 7,
+    val preferredAgentModelType: AgentModelTypePreference = AgentModelTypePreference.CODEX,
+    val preferredCustomAgentModel: String = "gpt-4",
 ) {
     fun normalized(): DesktopAppSettings = copy(
         defaultLookbackDays = defaultLookbackDays.takeIf { it in SUPPORTED_LOOKBACK_DAYS } ?: DEFAULT_LOOKBACK_DAYS,
+        preferredAgentModelType = when (preferredAgentModelType) {
+            AgentModelTypePreference.OTHER -> AgentModelTypePreference.GEMINI
+            else -> preferredAgentModelType
+        },
+        preferredCustomAgentModel = preferredCustomAgentModel.trim().ifBlank { "gpt-4" },
     )
 
     companion object {

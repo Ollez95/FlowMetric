@@ -2,7 +2,7 @@
 
 FlowMetric is a local-only developer analytics MVP for a single selected project. It estimates whether saved code changes were likely AI-assisted or likely non-AI using edit-pattern heuristics. It does not attempt exact attribution.
 
-FlowMetric can also record explicit `CODEX_PATCH` events when Codex is instructed to report its own edits. Those events are more precise than heuristics because they carry the exact before/after patch for the edited file.
+FlowMetric can also record explicit `AI_PATCH` events when an agent is instructed to report its own edits. Those events are more precise than heuristics because they carry the exact before/after patch for the edited file.
 
 ## Critical review
 
@@ -125,10 +125,10 @@ If you want FlowMetric to know that Codex changed exact lines, use the local rec
 scripts/record_codex_edit.sh <project-root> <absolute-file-path> <before-snapshot-file>
 ```
 
-You can still pass the model label manually before running the recorder if you want it stored on the event:
+You can still pass the model explicitly on each command if you want it stored on the event without relying on one global default:
 
 ```bash
-export FLOWMETRIC_AGENT_MODEL="gpt-5-codex"
+scripts/record_codex_edit.sh <project-root> <absolute-file-path> <before-snapshot-file> Codex gpt-5-codex
 ```
 
 If you want one command for multiple edited files, create a tab-separated manifest where each line is:
@@ -142,6 +142,8 @@ Then run:
 ```bash
 scripts/record_codex_batch.sh <project-root> <manifest-file>
 ```
+
+If you want approval reuse in Codex, do not combine `mktemp`, `printf`, and the recorder call into one shell one-liner. Create the manifest first, then run `scripts/record_codex_batch.sh` directly.
 
 For a faster setup in another local project, use the desktop app's `Install tracking` button after selecting that project. FlowMetric will install a small proxy script plus an `AGENTS.md` snippet into the target repo.
 
@@ -167,7 +169,7 @@ printf '%s\t%s\n' \
 scripts/record_codex_batch.sh /Users/gustavolorena/IdeaProjects/FlowMetric "$manifest"
 ```
 
-That appends a `CODEX_PATCH` event to `.flowmetric/events.json` using the exact diff between the saved snapshot and the current file on disk.
+That appends an `AI_PATCH` event to `.flowmetric/events.json` using the exact diff between the saved snapshot and the current file on disk.
 
 ## Current MVP status
 

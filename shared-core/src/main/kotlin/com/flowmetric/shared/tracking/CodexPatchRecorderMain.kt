@@ -51,14 +51,14 @@ object CodexPatchRecorderMain {
                 headCommitHash = gitOutput(projectRoot, "rev-parse", "HEAD"),
                 previousText = previousText,
                 currentText = currentText,
-                source = EventSource.CODEX_PATCH,
+                source = EventSource.AI_PATCH,
                 existingEvents = existingEvents,
                 timestampEpochMillis = Instant.now().toEpochMilli(),
             ),
         ) ?: return
 
         store.appendEvent(prepared.event, prepared.project)
-        println("Recorded CODEX_PATCH for ${absoluteFilePath.fileName}")
+        println("Recorded AI_PATCH for ${absoluteFilePath.fileName}")
     }
 
     private fun gitOutput(projectRoot: Path, vararg args: String): String? {

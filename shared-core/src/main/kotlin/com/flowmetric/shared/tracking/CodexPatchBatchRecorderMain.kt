@@ -32,7 +32,7 @@ object CodexPatchBatchRecorderMain {
                 parseManifestLine(line, index + 1)
             }
         if (manifestEntries.isEmpty()) {
-            println("No Codex edits found in manifest.")
+            println("No AI edits found in manifest.")
             return
         }
 
@@ -71,7 +71,7 @@ object CodexPatchBatchRecorderMain {
                     headCommitHash = headCommitHash,
                     previousText = previousText,
                     currentText = currentText,
-                    source = EventSource.CODEX_PATCH,
+                    source = EventSource.AI_PATCH,
                     existingEvents = mutableExistingEvents,
                     timestampEpochMillis = baseTimestamp + index,
                 ),
@@ -83,7 +83,7 @@ object CodexPatchBatchRecorderMain {
         }
 
         store.appendEvents(preparedEvents, preparedProjects)
-        println("Recorded ${preparedEvents.size} CODEX_PATCH event(s)")
+        println("Recorded ${preparedEvents.size} AI_PATCH event(s)")
     }
 
     private fun parseManifestLine(line: String, lineNumber: Int): ManifestEntry? {

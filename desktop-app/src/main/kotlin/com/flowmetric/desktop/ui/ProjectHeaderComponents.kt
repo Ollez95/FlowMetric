@@ -22,19 +22,19 @@ import androidx.compose.material.icons.outlined.ChevronLeft
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.DeleteSweep
-import androidx.compose.material.icons.outlined.Extension
 import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.ReportProblem
-import androidx.compose.material.icons.outlined.Tune
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -80,17 +80,23 @@ internal fun ProjectHeader(
     onBrowse: () -> Unit,
     onRefresh: () -> Unit,
     onConfigure: () -> Unit,
-    onInstallTracking: () -> Unit,
     isLoading: Boolean,
     statusMessage: String?,
 ) {
     var pendingRemovalPath by remember { mutableStateOf<String?>(null) }
     var orderedProjects by remember { mutableStateOf(recentProjects) }
+    var projectListMode by remember { mutableStateOf(ProjectListMode.ALL) }
     var draggedPath by remember { mutableStateOf<String?>(null) }
     var draggedFromIndex by remember { mutableStateOf<Int?>(null) }
     var draggedTargetIndex by remember { mutableStateOf<Int?>(null) }
     var draggedOffsetY by remember { mutableStateOf(0f) }
     val itemHeights = remember { mutableMapOf<String, Float>() }
+    val visibleProjects = remember(orderedProjects, projectListMode, projectPath) {
+        when (projectListMode) {
+            ProjectListMode.ALL -> orderedProjects
+            ProjectListMode.SELECTED -> orderedProjects.filter { it == projectPath }
+        }
+    }
 
     LaunchedEffect(recentProjects) {
         orderedProjects = recentProjects
@@ -127,17 +133,6 @@ internal fun ProjectHeader(
                     )
                 },
             )
-            ProjectActionButton(
-                onClick = onInstallTracking,
-                enabled = projectPath.isNotBlank(),
-                contentDescription = "Install tracking",
-                icon = {
-                    Icon(
-                        imageVector = Icons.Outlined.Extension,
-                        contentDescription = null,
-                    )
-                },
-            )
             FilledTonalIconButton(
                 onClick = onRefresh,
                 enabled = !isLoading,
@@ -158,12 +153,42 @@ internal fun ProjectHeader(
         if (recentProjects.isNotEmpty()) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Recent Projects", fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = MaterialTheme.colorScheme.onBackground)
-                Text("Drag and drop to change the order.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    FilterChip(
+                        selected = projectListMode == ProjectListMode.ALL,
+                        onClick = { projectListMode = ProjectListMode.ALL },
+                        label = { Text("All") },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = MaterialTheme.colorScheme.primary,
+                            selectedLabelColor = MaterialTheme.colorScheme.onPrimary,
+                        ),
+                    )
+                    FilterChip(
+                        selected = projectListMode == ProjectListMode.SELECTED,
+                        onClick = { projectListMode = ProjectListMode.SELECTED },
+                        label = { Text("Selected") },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = MaterialTheme.colorScheme.primary,
+                            selectedLabelColor = MaterialTheme.colorScheme.onPrimary,
+                        ),
+                    )
+                }
+                Text(
+                    when {
+                        projectListMode == ProjectListMode.SELECTED && projectPath.isBlank() ->
+                            "Select a project to show only the current one."
+                        projectListMode == ProjectListMode.SELECTED ->
+                            "Showing only the current selected project."
+                        else -> "Drag and drop to change the order."
+                    },
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 12.sp,
+                )
                 Column(
                     modifier = Modifier.fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    orderedProjects.forEach { path ->
+                    visibleProjects.forEach { path ->
                         val currentIndex = orderedProjects.indexOf(path)
                         RecentProjectChip(
                             path = path,
@@ -225,6 +250,11 @@ internal fun ProjectHeader(
     }
 }
 
+private enum class ProjectListMode {
+    ALL,
+    SELECTED,
+}
+
 @Composable
 private fun SettingsLauncherButton(onClick: () -> Unit) {
     ProjectActionButton(
@@ -232,7 +262,7 @@ private fun SettingsLauncherButton(onClick: () -> Unit) {
         contentDescription = "Open settings",
         icon = {
             Icon(
-                imageVector = Icons.Outlined.Tune,
+                imageVector = Icons.Outlined.Settings,
                 contentDescription = null,
             )
         },
@@ -728,6 +758,10 @@ private fun <T> SettingsChipRow(
                     selected = option == selected,
                     onClick = { onSelected(option) },
                     label = { Text(optionLabel(option)) },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = MaterialTheme.colorScheme.primary,
+                        selectedLabelColor = MaterialTheme.colorScheme.onPrimary,
+                    ),
                 )
             }
         }

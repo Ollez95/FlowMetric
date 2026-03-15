@@ -20,7 +20,8 @@
   2. Apply the edit.
   3. Run `scripts/record_codex_edit.sh <project-root> <absolute-file-path> <before-snapshot-file>`.
   4. If multiple files were edited, you may instead create a tab-separated manifest of `<absolute-file-path>\t<before-snapshot-file>` entries and run `scripts/record_codex_batch.sh <project-root> <manifest-file>`.
-  This records a `CODEX_PATCH` event with the exact patch payload in `.flowmetric/events.json`.
+  5. Do not wrap manifest creation and recorder execution in one dynamic shell line. Create the manifest first, then call `scripts/record_codex_batch.sh` directly so approval can reuse the stable script command.
+  This records an `AI_PATCH` event with the exact patch payload in `.flowmetric/events.json`.
 
 ## UX guidelines
 - Confidence must always be visible beside estimated classifications.
@@ -39,4 +40,22 @@
   `scripts/record_codex_edit.sh /absolute/path/to/project-root /absolute/path/to/file "$tmp_before" Codex`
 - For multiple files, create a tab-separated manifest of `<absolute-file-path>\t<before-snapshot-file>` rows and run:
   `scripts/record_codex_batch.sh /absolute/path/to/project-root /absolute/path/to/manifest.tsv Codex`
+- Create the manifest in a separate step. Do not combine manifest creation and recorder execution in one shell command if you want approval reuse.
 - Keep the file paths absolute so FlowMetric can resolve the patch correctly.
+
+<!-- FLOWMETRIC CODEX TRACKING START -->
+## FlowMetric Agent Tracking
+- When Gemini edits a tracked project file, record the exact patch so FlowMetric can attribute those lines.
+- Before the agent edits a file, save a temp snapshot:
+  `tmp_before="$(mktemp)"; cp /absolute/path/to/file "$tmp_before"`
+- Pass the model explicitly as the last argument so different events can use different models.
+- Example model for Gemini:
+  `gemini`
+- After the agent finishes editing, run:
+  `scripts/record_codex_edit.sh /absolute/path/to/project-root /absolute/path/to/file "$tmp_before" Gemini gemini`
+- For one-shot batch recording across many files, create a tab-separated manifest:
+  `printf '%s\t%s\n' /absolute/path/to/file "$tmp_before" > /tmp/flowmetric-agent-manifest.tsv`
+  `scripts/record_codex_batch.sh /absolute/path/to/project-root /tmp/flowmetric-agent-manifest.tsv Gemini gemini`
+- Create the manifest first, then run `scripts/record_codex_batch.sh` directly. Avoid a single combined shell one-liner if you want approval reuse.
+- Keep the file paths absolute so FlowMetric can resolve the patch correctly.
+<!-- FLOWMETRIC CODEX TRACKING END -->
